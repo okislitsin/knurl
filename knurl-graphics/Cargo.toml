@@ -1,0 +1,14 @@
+[package]
+name = "knurl-graphics"
+version = "0.1.0"
+edition = "2024"
+description = "embedded-graphics pixel-display adapter for knurl"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/okislitsin/knurl"
+readme = "../README.md"
+keywords = ["embedded", "tui", "embedded-graphics", "oled", "tft"]
+categories = ["embedded", "no-std"]
+
+[dependencies]
+knurl-core = { path = "../knurl-core", version = "0.1.0" }
+embedded-graphics = "0.8"

@@ -1,0 +1,18 @@
+[workspace]
+members = [
+    "knurl-core",
+    "knurl-graphics",
+    "knurl",
+    # std desktop simulator - intentionally excluded from default-members below
+    # so `cargo build`/`cargo test` from the root never require SDL2. The demos
+    # live here as per-target examples (oled, tft), not as a shared crate.
+    "knurl-sim",
+]
+# Prevent cargo build/test from the workspace root from attempting to
+# compile the SDL2-backed simulator (or the embedded target crate) on the host.
+default-members = [
+    "knurl-core",
+    "knurl-graphics",
+    "knurl",
+]
+resolver = "2"

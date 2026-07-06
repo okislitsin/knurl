@@ -1,0 +1,16 @@
+[package]
+name = "knurl-core"
+version = "0.1.0"
+edition = "2024"
+description = "Core abstractions for knurl - no_std, zero dependencies"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/okislitsin/knurl"
+readme = "../README.md"
+keywords = ["embedded", "tui", "no-std", "display"]
+categories = ["embedded", "no-std"]
+
+[features]
+# Enables MockTarget for use in downstream crate tests
+mock = []
+
+[dependencies]

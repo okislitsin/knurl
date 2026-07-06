@@ -1,0 +1,29 @@
+[package]
+name = "knurl-sim"
+version = "0.1.0"
+edition = "2024"
+description = "Desktop (and future web) simulator for the knurl embedded TUI library"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/okislitsin/knurl"
+keywords = ["embedded", "tui", "simulator", "oled", "embedded-graphics"]
+categories = ["embedded", "development-tools", "simulation"]
+# Dev/demo crate with a system dependency (SDL2) - not published to crates.io.
+# Get it from the git repository instead.
+publish = false
+
+[dependencies]
+knurl-core = { path = "../knurl-core", version = "0.1.0" }
+knurl-graphics = { path = "../knurl-graphics", version = "0.1.0" }
+embedded-graphics = "0.8"
+# Pinned to the release that targets embedded-graphics 0.8 - the `DrawTarget`
+# types must unify with knurl-graphics, or `GraphicsTarget` won't accept the
+# `SimulatorDisplay`. Optional so the `web` feature (and `cargo test`) need not
+# pull in SDL2.
+embedded-graphics-simulator = { version = "0.8.0", optional = true }
+
+[features]
+default = ["desktop"]
+# Desktop backend: SDL2 window via embedded-graphics-simulator (system dep).
+desktop = ["dep:embedded-graphics-simulator"]
+# Placeholder for a future WASM/web backend - builds without SDL2.
+web = []
