@@ -71,7 +71,10 @@ impl<Id: Copy, const DEPTH: usize> Router<Id, DEPTH> {
     /// Creates a router with `root` as the bottom screen. The root cannot be
     /// popped (`pop` never removes it).
     pub fn new(root: Id) -> Self {
-        Self { stack: [root; DEPTH], len: 1 }
+        Self {
+            stack: [root; DEPTH],
+            len: 1,
+        }
     }
 
     /// The current (top) screen.

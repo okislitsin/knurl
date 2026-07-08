@@ -30,14 +30,46 @@ use knurl_sim::graphics::{ColorGraphicsTarget, ColorTheme, GraphicsTarget, Theme
 // ── Demo data (ASCII), mirroring the oled / tft demos ──────────────────────────
 
 const OLED_MENU: &[&str] = &[
-    "Text", "List", "Tree", "Table", "Bar chart", "Toggles", "Editors", "Radio", "Text input",
-    "Pager", "Indicators", "Position", "Tabs", "Status bar", "Help", "Dialog", "Form", "Layout",
+    "Text",
+    "List",
+    "Tree",
+    "Table",
+    "Bar chart",
+    "Toggles",
+    "Editors",
+    "Radio",
+    "Text input",
+    "Pager",
+    "Indicators",
+    "Position",
+    "Tabs",
+    "Status bar",
+    "Help",
+    "Dialog",
+    "Form",
+    "Layout",
     "Exit",
 ];
 const TFT_MENU: &[&str] = &[
-    "Text", "List", "Tree", "Table", "Bar chart", "Toggles", "Editors", "Radio", "Text input",
-    "Pager (live)", "Indicators", "Position", "Tabs", "Status bar", "Help", "Dialog", "Form",
-    "Layout", "Exit",
+    "Text",
+    "List",
+    "Tree",
+    "Table",
+    "Bar chart",
+    "Toggles",
+    "Editors",
+    "Radio",
+    "Text input",
+    "Pager (live)",
+    "Indicators",
+    "Position",
+    "Tabs",
+    "Status bar",
+    "Help",
+    "Dialog",
+    "Form",
+    "Layout",
+    "Exit",
 ];
 const LIST_ITEMS: &[&str] = &[
     "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet",
@@ -86,7 +118,10 @@ fn shoot_mono(w: u32, h: u32, scale: u32, name: &str, draw: impl FnOnce(&mut dyn
         draw(&mut target);
     }
     let output = OutputSettingsBuilder::new().scale(scale).build();
-    display.to_rgb_output_image(&output).save_png(docs_path(name)).unwrap();
+    display
+        .to_rgb_output_image(&output)
+        .save_png(docs_path(name))
+        .unwrap();
     println!("wrote docs/{name}");
 }
 
@@ -100,7 +135,10 @@ fn shoot_color(w: u32, h: u32, scale: u32, name: &str, draw: impl FnOnce(&mut dy
         draw(&mut target);
     }
     let output = OutputSettingsBuilder::new().scale(scale).build();
-    display.to_rgb_output_image(&output).save_png(docs_path(name)).unwrap();
+    display
+        .to_rgb_output_image(&output)
+        .save_png(docs_path(name))
+        .unwrap();
     println!("wrote docs/{name}");
 }
 
@@ -109,17 +147,26 @@ fn shoot_color(w: u32, h: u32, scale: u32, name: &str, draw: impl FnOnce(&mut dy
 /// Draws a centred title and returns the body area below it (OLED: no status bar).
 fn oled_chrome(t: &mut dyn RenderTarget, title: &str) -> Area {
     let (w, h, lh) = (t.width(), t.height(), t.line_height());
-    Title::new(title).with_align(Align::Center).view(t, Area::new(0, 0, w, lh));
+    Title::new(title)
+        .with_align(Align::Center)
+        .view(t, Area::new(0, 0, w, lh));
     Area::new(1, lh, w.saturating_sub(1), h.saturating_sub(lh))
 }
 
 /// Draws a centred title + a bottom status-bar hint, returns the body between.
 fn tft_chrome(t: &mut dyn RenderTarget, title: &str, hint: &str) -> Area {
     let (w, h, lh) = (t.width(), t.height(), t.line_height());
-    let [head, mid, foot] =
-        VStack::split(Area::new(0, 0, w, h), &[Length(lh + 2), Fill(1), Length(lh + 2)]);
-    Title::new(title).with_align(Align::Center).view(t, Area::new(head.x, head.y + 1, head.w, lh));
-    StatusBar::new().with_left(hint).with_right("knurl").view(t, foot);
+    let [head, mid, foot] = VStack::split(
+        Area::new(0, 0, w, h),
+        &[Length(lh + 2), Fill(1), Length(lh + 2)],
+    );
+    Title::new(title)
+        .with_align(Align::Center)
+        .view(t, Area::new(head.x, head.y + 1, head.w, lh));
+    StatusBar::new()
+        .with_left(hint)
+        .with_right("knurl")
+        .view(t, foot);
     Area::new(4, mid.y, mid.w.saturating_sub(8), mid.h)
 }
 
@@ -165,14 +212,19 @@ fn main() {
     });
 
     // Editors form - Counter / Slider / Picker + a focusable Back button.
-    let mut counter = Counter::new("Bright").with_range(0, 100).with_step(10).with_value(60);
-    let mut slider = Slider::new("Vol").with_range(0, 100).with_step(10).with_value(40);
+    let mut counter = Counter::new("Bright")
+        .with_range(0, 100)
+        .with_step(10)
+        .with_value(60);
+    let mut slider = Slider::new("Vol")
+        .with_range(0, 100)
+        .with_step(10)
+        .with_value(40);
     let mut picker = Picker::new("Mode", MODES);
     let mut back = Button::new("< Back");
     let form = Form::new();
     {
-        let mut f: [&mut dyn FormField; 4] =
-            [&mut counter, &mut slider, &mut picker, &mut back];
+        let mut f: [&mut dyn FormField; 4] = [&mut counter, &mut slider, &mut picker, &mut back];
         form.sync_focus(&mut f);
     }
     shoot_mono(128, 64, 4, "oled-form.png", |t| {
@@ -201,7 +253,10 @@ fn main() {
     shoot_color(320, 240, 2, "tft-chart.png", |t| {
         let body = tft_chrome(t, "Bar chart", "Turn: move   Push: Back");
         let top = body_with_back(t, body);
-        BarChart::new(&chart_data).with_label_width(48).with_max(100).view(t, top);
+        BarChart::new(&chart_data)
+            .with_label_width(48)
+            .with_max(100)
+            .view(t, top);
     });
 
     let pager = Pager::new(PAGER_LINES).with_follow(true);
@@ -211,7 +266,11 @@ fn main() {
         pager.view(t, top);
     });
 
-    let dialog = Dialog::new("Save changes?", "Apply the new settings?", &["OK", "Cancel"]);
+    let dialog = Dialog::new(
+        "Save changes?",
+        "Apply the new settings?",
+        &["OK", "Cancel"],
+    );
     shoot_color(320, 240, 2, "tft-dialog.png", |t| {
         let body = tft_chrome(t, "Dialog", "Push: a button / Back");
         let top = body_with_back(t, body);

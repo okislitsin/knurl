@@ -103,7 +103,12 @@ impl<'a> Component for Dialog<'a> {
         let max_chars = (inner.w / cw) as usize;
 
         // Title (Accent) on the first inner row.
-        target.draw_text(inner.x, inner.y, truncate(self.title, max_chars), Style::Accent);
+        target.draw_text(
+            inner.x,
+            inner.y,
+            truncate(self.title, max_chars),
+            Style::Accent,
+        );
 
         // Message (Normal) on the second row, if there's room.
         if inner.h >= 2 * line_h {
@@ -128,7 +133,10 @@ impl<'a> Component for Dialog<'a> {
             let cell_w = target.text_width(label) + 2 * cw;
             let focused = i == self.selected;
             if focused {
-                target.draw_box(Area::new(x, by, cell_w.min(right - x), line_h), BorderStyle::Single);
+                target.draw_box(
+                    Area::new(x, by, cell_w.min(right - x), line_h),
+                    BorderStyle::Single,
+                );
             }
             let style = if focused { Style::Focus } else { Style::Normal };
             target.draw_text(x + cw, by, label, style);
@@ -189,10 +197,20 @@ mod tests {
         assert!(tx.contains(&(1, 1, "Confirm".into(), Style::Accent)));
         assert!(tx.contains(&(1, 11, "Sure?".into(), Style::Normal)));
         // Buttons on the last inner row (by = 1 + 48 - 10 = 39). "Yes" focused.
-        assert!(tx.iter().any(|(_, y, s, st)| *y == 39 && s == "Yes" && *st == Style::Focus));
-        assert!(tx.iter().any(|(_, y, s, st)| *y == 39 && s == "No" && *st == Style::Normal));
+        assert!(
+            tx.iter()
+                .any(|(_, y, s, st)| *y == 39 && s == "Yes" && *st == Style::Focus)
+        );
+        assert!(
+            tx.iter()
+                .any(|(_, y, s, st)| *y == 39 && s == "No" && *st == Style::Normal)
+        );
         // The focused button is boxed (a Single box on the button row).
-        assert!(t.ops().iter().any(|op| matches!(op, Op::Box { area, border: BorderStyle::Single } if area.y == 39)));
+        assert!(
+            t.ops().iter().any(
+                |op| matches!(op, Op::Box { area, border: BorderStyle::Single } if area.y == 39)
+            )
+        );
     }
 
     #[test]

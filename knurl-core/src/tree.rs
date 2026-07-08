@@ -7,7 +7,10 @@ use crate::{Area, Component, Msg, RenderTarget, Style, V_SCROLL_RESERVE, draw_v_
 /// Returns the first `max_chars` Unicode scalar values of `s` as a `&str`.
 /// No allocation - slices at a char boundary.
 fn truncate_str(s: &str, max_chars: usize) -> &str {
-    s.char_indices().nth(max_chars).map(|(i, _)| &s[..i]).unwrap_or(s)
+    s.char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| &s[..i])
+        .unwrap_or(s)
 }
 
 // ── TreeItem ────────────────────────────────────────────────────────────────
@@ -77,10 +80,11 @@ impl<const N: usize> TreeModel for [TreeItem<'_>; N] {
 /// A vertically scrolling tree of expandable nodes, pixel-laid-out and backed by
 /// a [`TreeModel`].
 ///
-/// Parent nodes get a pixel expander ([`draw_expander`](RenderTarget::draw_expander)
-/// - triangle on a pixel target); each nesting level draws a thin indent guide.
-/// The selected node is `Style::Focus`, the rest `Muted`. Scrolls (never
-/// truncates) and shows the built-in scroll indicator on overflow.
+/// Parent nodes get a pixel expander
+/// ([`draw_expander`](RenderTarget::draw_expander) - triangle on a pixel
+/// target); each nesting level draws a thin indent guide. The selected node is
+/// `Style::Focus`, the rest `Muted`. Scrolls (never truncates) and shows the
+/// built-in scroll indicator on overflow.
 ///
 /// ## Capacity
 /// Expansion is a `u64` bitmask, so at most **64 nodes** can be expanded
@@ -221,7 +225,9 @@ impl<'a, M: TreeModel + ?Sized> Tree<'a, M> {
 
     /// Total number of currently-visible nodes.
     fn total_visible(&self) -> usize {
-        (0..self.model.item_count()).filter(|&i| self.is_visible(i)).count()
+        (0..self.model.item_count())
+            .filter(|&i| self.is_visible(i))
+            .count()
     }
 
     /// Number of visible nodes strictly before `idx` (the scroll rank of `idx`).
@@ -308,7 +314,11 @@ impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
             let y = area.y.saturating_add(row as u16 * line_h);
             let d = self.model.depth(idx) as u16;
             let base_x = area.x.saturating_add(d.saturating_mul(indent_px));
-            let style = if idx == self.selected { Style::Focus } else { Style::Muted };
+            let style = if idx == self.selected {
+                Style::Focus
+            } else {
+                Style::Muted
+            };
 
             // Indent guides: a thin vertical line at each ancestor level.
             for level in 0..d {
@@ -331,14 +341,25 @@ impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
             let avail = content_w.saturating_sub(used);
             let max = (avail / cw) as usize;
             if max > 0 {
-                target.draw_text(label_x, y, truncate_str(self.model.get_item(idx), max), style);
+                target.draw_text(
+                    label_x,
+                    y,
+                    truncate_str(self.model.get_item(idx), max),
+                    style,
+                );
             }
 
             maybe = self.next_visible(idx);
         }
 
         if overflow {
-            draw_v_scroll(target, area, total, visible_rows, self.visible_before(self.offset));
+            draw_v_scroll(
+                target,
+                area,
+                total,
+                visible_rows,
+                self.visible_before(self.offset),
+            );
         }
     }
 
@@ -405,12 +426,21 @@ mod tests {
         assert!(tx.contains(&(0, 0, ">".into(), Style::Focus))); // Settings expander
         assert!(tx.contains(&(12, 0, "Settings".into(), Style::Focus)));
         assert!(tx.contains(&(0, 10, ">".into(), Style::Muted))); // Sensors expander
-        assert!(tx.iter().any(|(x, y, s, _)| *x == 12 && *y == 10 && s == "Sensors"));
+        assert!(
+            tx.iter()
+                .any(|(x, y, s, _)| *x == 12 && *y == 10 && s == "Sensors")
+        );
         // About is a leaf → no expander on its row (y = 20).
-        assert!(tx.iter().any(|(x, y, s, _)| *x == 12 && *y == 20 && s == "About"));
+        assert!(
+            tx.iter()
+                .any(|(x, y, s, _)| *x == 12 && *y == 20 && s == "About")
+        );
         assert!(!tx.iter().any(|(x, y, ..)| *x == 0 && *y == 20));
         // Child nodes hidden.
-        assert!(!tx.iter().any(|(_, _, s, _)| s == "Display" || s == "Brightness"));
+        assert!(
+            !tx.iter()
+                .any(|(_, _, s, _)| s == "Display" || s == "Brightness")
+        );
     }
 
     #[test]
@@ -468,7 +498,11 @@ mod tests {
         tree.update(&Msg::Down); // About (7)
         let mut t1 = RecordingTarget::new(160, 20);
         tree.view(&mut t1, Area::new(0, 0, 160, 20));
-        assert!(texts(&t1).iter().any(|(_, _, s, st)| s == "About" && *st == Style::Focus));
+        assert!(
+            texts(&t1)
+                .iter()
+                .any(|(_, _, s, st)| s == "About" && *st == Style::Focus)
+        );
     }
 
     #[test]

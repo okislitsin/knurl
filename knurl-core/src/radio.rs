@@ -106,9 +106,17 @@ impl<'a> Component for Radio<'a> {
                 break;
             }
             let y = area.y.saturating_add(row as u16 * line_h);
-            let style = if idx == self.cursor { Style::Focus } else { Style::Muted };
+            let style = if idx == self.cursor {
+                Style::Focus
+            } else {
+                Style::Muted
+            };
 
-            target.draw_radio(Area::new(area.x, y, ind_w, area.h.min(line_h)), idx == self.selected, style);
+            target.draw_radio(
+                Area::new(area.x, y, ind_w, area.h.min(line_h)),
+                idx == self.selected,
+                style,
+            );
 
             if text_max > 0 {
                 target.draw_text(label_x, y, truncate(self.options[idx], text_max), style);
@@ -155,10 +163,16 @@ mod tests {
         let tx = texts(&t);
         // Row 0 chosen + cursor → "(*)" Focus, "Alpha" Focus at x=24.
         assert!(tx.contains(&(0, 0, "(*)".into(), Style::Focus)));
-        assert!(tx.iter().any(|(x, y, s, st)| *x == 24 && *y == 0 && s == "Alpha" && *st == Style::Focus));
+        assert!(
+            tx.iter()
+                .any(|(x, y, s, st)| *x == 24 && *y == 0 && s == "Alpha" && *st == Style::Focus)
+        );
         // Row 1 not chosen, not cursor → "( )" Muted, "Beta" Muted at y=10.
         assert!(tx.contains(&(0, 10, "( )".into(), Style::Muted)));
-        assert!(tx.iter().any(|(_, y, s, st)| *y == 10 && s == "Beta" && *st == Style::Muted));
+        assert!(
+            tx.iter()
+                .any(|(_, y, s, st)| *y == 10 && s == "Beta" && *st == Style::Muted)
+        );
     }
 
     #[test]

@@ -30,7 +30,12 @@ pub struct Title<'a> {
 
 impl<'a> Title<'a> {
     pub const fn new(text: &'a str) -> Self {
-        Self { text, style: Style::Accent, align: Align::Left, dirty: Cell::new(true) }
+        Self {
+            text,
+            style: Style::Accent,
+            align: Align::Left,
+            dirty: Cell::new(true),
+        }
     }
 
     /// Replaces the heading text and marks it for repaint.
@@ -114,7 +119,11 @@ pub struct Separator {
 
 impl Separator {
     pub const fn new() -> Self {
-        Self { thickness: 1, style: Style::Muted, dirty: Cell::new(true) }
+        Self {
+            thickness: 1,
+            style: Style::Muted,
+            dirty: Cell::new(true),
+        }
     }
 
     /// Sets the rule thickness in pixels (default 1).
@@ -248,8 +257,13 @@ mod tests {
         assert_eq!(
             t.ops(),
             &[
-                Op::Clear { area: Area::new(0, 0, 64, 10) },
-                Op::Fill { area: Area::new(0, 4, 64, 1), style: Style::Muted },
+                Op::Clear {
+                    area: Area::new(0, 0, 64, 10)
+                },
+                Op::Fill {
+                    area: Area::new(0, 4, 64, 1),
+                    style: Style::Muted
+                },
             ]
         );
     }
@@ -265,8 +279,13 @@ mod tests {
         assert_eq!(
             t.ops(),
             &[
-                Op::Clear { area: Area::new(0, 0, 64, 10) },
-                Op::Fill { area: Area::new(0, 4, 64, 2), style: Style::Accent },
+                Op::Clear {
+                    area: Area::new(0, 0, 64, 10)
+                },
+                Op::Fill {
+                    area: Area::new(0, 4, 64, 2),
+                    style: Style::Accent
+                },
             ]
         );
     }

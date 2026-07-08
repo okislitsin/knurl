@@ -114,20 +114,40 @@ pub struct Padding {
 }
 
 impl Padding {
-    pub const ZERO: Self = Self { top: 0, right: 0, bottom: 0, left: 0 };
+    pub const ZERO: Self = Self {
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+    };
 
     pub const fn new(top: u16, right: u16, bottom: u16, left: u16) -> Self {
-        Self { top, right, bottom, left }
+        Self {
+            top,
+            right,
+            bottom,
+            left,
+        }
     }
 
     /// Equal padding on all four sides (pixels).
     pub const fn uniform(n: u16) -> Self {
-        Self { top: n, right: n, bottom: n, left: n }
+        Self {
+            top: n,
+            right: n,
+            bottom: n,
+            left: n,
+        }
     }
 
     /// Equal `vertical` padding top and bottom, equal `horizontal` left and right.
     pub const fn symmetric(vertical: u16, horizontal: u16) -> Self {
-        Self { top: vertical, right: horizontal, bottom: vertical, left: horizontal }
+        Self {
+            top: vertical,
+            right: horizontal,
+            bottom: vertical,
+            left: horizontal,
+        }
     }
 
     /// The area remaining inside the padding. Returns `None` when the inset
@@ -168,9 +188,10 @@ pub enum Msg {
 /// Semantic role of a piece of text - *what* it is, not *how* it's drawn.
 ///
 /// Each [`RenderTarget`] decides how to render every variant for its medium.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Style {
     /// Ordinary body text.
+    #[default]
     Normal,
     /// The selected element of a list.
     Inverted,
@@ -184,12 +205,6 @@ pub enum Style {
     Muted,
     /// Errors and warnings.
     Danger,
-}
-
-impl Default for Style {
-    fn default() -> Self {
-        Style::Normal
-    }
 }
 
 /// Horizontal alignment of text within an [`Area`].
@@ -215,11 +230,20 @@ pub struct Marker {
 }
 
 impl Marker {
-    pub const ARROW: Self = Self { selected: "> ", unselected: "  " };
-    pub const NONE: Self = Self { selected: "", unselected: "" };
+    pub const ARROW: Self = Self {
+        selected: "> ",
+        unselected: "  ",
+    };
+    pub const NONE: Self = Self {
+        selected: "",
+        unselected: "",
+    };
 
     pub const fn new(selected: &'static str, unselected: &'static str) -> Self {
-        Self { selected, unselected }
+        Self {
+            selected,
+            unselected,
+        }
     }
 
     /// Prefix width in characters (the displayed slot width), measured from
@@ -264,11 +288,11 @@ impl BorderStyle {
     /// Returns `(top_left, top_right, bottom_left, bottom_right, horizontal, vertical)`.
     pub const fn chars(self) -> (char, char, char, char, char, char) {
         match self {
-            BorderStyle::None    => (' ', ' ', ' ', ' ', ' ', ' '),
-            BorderStyle::Single  => ('┌', '┐', '└', '┘', '─', '│'),
-            BorderStyle::Double  => ('╔', '╗', '╚', '╝', '═', '║'),
+            BorderStyle::None => (' ', ' ', ' ', ' ', ' ', ' '),
+            BorderStyle::Single => ('┌', '┐', '└', '┘', '─', '│'),
+            BorderStyle::Double => ('╔', '╗', '╚', '╝', '═', '║'),
             BorderStyle::Rounded => ('╭', '╮', '╰', '╯', '─', '│'),
-            BorderStyle::Thick   => ('┏', '┓', '┗', '┛', '━', '┃'),
+            BorderStyle::Thick => ('┏', '┓', '┗', '┛', '━', '┃'),
         }
     }
 }
@@ -437,7 +461,10 @@ pub(crate) fn draw_v_scroll(
     let progress = ((track_h - thumb_h) as usize * rank)
         .checked_div(max_off)
         .unwrap_or(0) as u16;
-    target.fill_rect(Area::new(band_x, area.y + progress, BAND_W, thumb_h), Style::Focus);
+    target.fill_rect(
+        Area::new(band_x, area.y + progress, BAND_W, thumb_h),
+        Style::Focus,
+    );
 }
 
 /// An isolated, composable UI element following the Elm update/view cycle.
@@ -536,7 +563,11 @@ pub struct Label<'a> {
 
 impl<'a> Label<'a> {
     pub const fn new(text: &'a str) -> Self {
-        Self { text, style: Style::Normal, dirty: Cell::new(true) }
+        Self {
+            text,
+            style: Style::Normal,
+            dirty: Cell::new(true),
+        }
     }
 
     pub const fn with_style(mut self, style: Style) -> Self {
@@ -606,11 +637,28 @@ pub mod mock {
     /// One recorded draw call.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum Op {
-        Text { x: u16, y: u16, text: String, style: Style },
-        Box { area: Area, border: BorderStyle },
-        Clear { area: Area },
-        Fill { area: Area, style: Style },
-        Bar { area: Area, fill_permille: u16, style: Style },
+        Text {
+            x: u16,
+            y: u16,
+            text: String,
+            style: Style,
+        },
+        Box {
+            area: Area,
+            border: BorderStyle,
+        },
+        Clear {
+            area: Area,
+        },
+        Fill {
+            area: Area,
+            style: Style,
+        },
+        Bar {
+            area: Area,
+            fill_permille: u16,
+            style: Style,
+        },
     }
 
     /// Records every draw call and exposes fixed font metrics.
@@ -626,7 +674,13 @@ pub mod mock {
         /// A target `width` × `height` pixels with default metrics
         /// (`char_width = 6`, `line_height = 10`).
         pub fn new(width: u16, height: u16) -> Self {
-            Self { width, height, char_w: 6, line_h: 10, ops: Vec::new() }
+            Self {
+                width,
+                height,
+                char_w: 6,
+                line_h: 10,
+                ops: Vec::new(),
+            }
         }
 
         /// Overrides the reported font metrics.
@@ -672,7 +726,12 @@ pub mod mock {
         }
 
         fn draw_text(&mut self, x: u16, y: u16, text: &str, style: Style) {
-            self.ops.push(Op::Text { x, y, text: text.to_string(), style });
+            self.ops.push(Op::Text {
+                x,
+                y,
+                text: text.to_string(),
+                style,
+            });
         }
 
         fn draw_box(&mut self, area: Area, border: BorderStyle) {
@@ -690,7 +749,11 @@ pub mod mock {
         // Recorded verbatim (rather than via the fill_rect default) so tests can
         // assert on the semantic bar call and its fraction.
         fn draw_bar(&mut self, area: Area, fill_permille: u16, style: Style) {
-            self.ops.push(Op::Bar { area, fill_permille, style });
+            self.ops.push(Op::Bar {
+                area,
+                fill_permille,
+                style,
+            });
         }
     }
 }
@@ -740,7 +803,9 @@ mod tests {
 
     #[test]
     fn padding_inner_shrinks() {
-        let inner = Padding::new(1, 2, 1, 2).inner(Area::new(0, 0, 10, 4)).unwrap();
+        let inner = Padding::new(1, 2, 1, 2)
+            .inner(Area::new(0, 0, 10, 4))
+            .unwrap();
         assert_eq!(inner, Area::new(2, 1, 6, 2));
     }
 
@@ -752,8 +817,16 @@ mod tests {
 
     #[test]
     fn padding_inner_collapse_returns_none() {
-        assert!(Padding::new(0, 5, 0, 5).inner(Area::new(0, 0, 10, 4)).is_none());
-        assert!(Padding::new(2, 0, 2, 0).inner(Area::new(0, 0, 10, 4)).is_none());
+        assert!(
+            Padding::new(0, 5, 0, 5)
+                .inner(Area::new(0, 0, 10, 4))
+                .is_none()
+        );
+        assert!(
+            Padding::new(2, 0, 2, 0)
+                .inner(Area::new(0, 0, 10, 4))
+                .is_none()
+        );
     }
 
     // ── Marker ──────────────────────────────────────────────────────────────
@@ -893,8 +966,14 @@ mod tests {
         a.view(&mut t1, Area::new(0, 0, 60, 10));
         b.view(&mut t1, Area::new(0, 20, 60, 10));
         // Only `b`'s text was drawn; `a` issued nothing.
-        let drew_a = t1.ops().iter().any(|op| matches!(op, Op::Text { text, .. } if text == "AAA"));
-        let drew_b = t1.ops().iter().any(|op| matches!(op, Op::Text { text, .. } if text == "BBB"));
+        let drew_a = t1
+            .ops()
+            .iter()
+            .any(|op| matches!(op, Op::Text { text, .. } if text == "AAA"));
+        let drew_b = t1
+            .ops()
+            .iter()
+            .any(|op| matches!(op, Op::Text { text, .. } if text == "BBB"));
         assert!(drew_b && !drew_a);
     }
 
@@ -944,7 +1023,10 @@ mod tests {
         t.fill_rect(Area::new(2, 4, 10, 1), Style::Accent);
         assert_eq!(
             t.ops(),
-            &[Op::Fill { area: Area::new(2, 4, 10, 1), style: Style::Accent }]
+            &[Op::Fill {
+                area: Area::new(2, 4, 10, 1),
+                style: Style::Accent
+            }]
         );
     }
 
@@ -956,8 +1038,13 @@ mod tests {
         assert_eq!(
             t.ops(),
             &[
-                Op::Box { area: Area::new(0, 0, 20, 12), border: BorderStyle::Single },
-                Op::Clear { area: Area::new(1, 1, 4, 1) },
+                Op::Box {
+                    area: Area::new(0, 0, 20, 12),
+                    border: BorderStyle::Single
+                },
+                Op::Clear {
+                    area: Area::new(1, 1, 4, 1)
+                },
             ]
         );
     }
@@ -968,7 +1055,11 @@ mod tests {
         t.draw_bar(Area::new(0, 0, 40, 6), 250, Style::Accent);
         assert_eq!(
             t.ops(),
-            &[Op::Bar { area: Area::new(0, 0, 40, 6), fill_permille: 250, style: Style::Accent }]
+            &[Op::Bar {
+                area: Area::new(0, 0, 40, 6),
+                fill_permille: 250,
+                style: Style::Accent
+            }]
         );
     }
 }

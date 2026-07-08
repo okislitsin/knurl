@@ -78,7 +78,12 @@ pub struct Checkbox<'a> {
 
 impl<'a> Checkbox<'a> {
     pub const fn new(label: &'a str) -> Self {
-        Self { label, checked: false, focused: false, dirty: Cell::new(true) }
+        Self {
+            label,
+            checked: false,
+            focused: false,
+            dirty: Cell::new(true),
+        }
     }
 
     pub const fn with_checked(mut self, c: bool) -> Self {
@@ -116,7 +121,11 @@ impl<'a> Component for Checkbox<'a> {
             return;
         }
         let cw = target.char_width().max(1);
-        let style = if self.focused { Style::Focus } else { Style::Normal };
+        let style = if self.focused {
+            Style::Focus
+        } else {
+            Style::Normal
+        };
         let (ind, label_x) = indicator_slot(area, cw);
         target.draw_check(ind, self.checked, style);
 
@@ -164,7 +173,12 @@ pub struct Toggle<'a> {
 
 impl<'a> Toggle<'a> {
     pub const fn new(label: &'a str) -> Self {
-        Self { label, on: false, focused: false, dirty: Cell::new(true) }
+        Self {
+            label,
+            on: false,
+            focused: false,
+            dirty: Cell::new(true),
+        }
     }
 
     pub const fn with_on(mut self, on: bool) -> Self {
@@ -208,7 +222,11 @@ impl<'a> Component for Toggle<'a> {
             return;
         }
         let cw = target.char_width().max(1);
-        let style = if self.focused { Style::Focus } else { Style::Normal };
+        let style = if self.focused {
+            Style::Focus
+        } else {
+            Style::Normal
+        };
 
         // Indicator right-aligned (3-char slot); label fills the rest.
         let ind_w = 3 * cw;
@@ -265,7 +283,12 @@ pub struct Button<'a> {
 
 impl<'a> Button<'a> {
     pub const fn new(label: &'a str) -> Self {
-        Self { label, focused: false, pressed: false, dirty: Cell::new(true) }
+        Self {
+            label,
+            focused: false,
+            pressed: false,
+            dirty: Cell::new(true),
+        }
     }
 
     /// Returns whether the button was pressed since the last call, clearing
@@ -287,7 +310,11 @@ impl<'a> Component for Button<'a> {
         if area.w == 0 || area.h == 0 {
             return;
         }
-        let style = if self.focused { Style::Focus } else { Style::Normal };
+        let style = if self.focused {
+            Style::Focus
+        } else {
+            Style::Normal
+        };
         target.draw_text(area.x, area.y, self.label, style);
     }
 
@@ -404,8 +431,16 @@ impl<'a> Component for Counter<'a> {
         // Focus highlights the label; the value is highlighted only while it is
         // actually being edited (Form edit mode), so a focused-but-idle row does
         // not look like it is being changed.
-        let label_style = if self.focused { Style::Focus } else { Style::Normal };
-        let value_style = if self.editing { Style::Focus } else { Style::Normal };
+        let label_style = if self.focused {
+            Style::Focus
+        } else {
+            Style::Normal
+        };
+        let value_style = if self.editing {
+            Style::Focus
+        } else {
+            Style::Normal
+        };
         draw_labeled_value(target, area, self.label, label_style, value, value_style);
     }
 
@@ -538,7 +573,11 @@ impl<'a> Component for Slider<'a> {
         }
 
         let cw = target.char_width().max(1);
-        let label_style = if self.focused { Style::Focus } else { Style::Normal };
+        let label_style = if self.focused {
+            Style::Focus
+        } else {
+            Style::Normal
+        };
         let lw = self.label_w.min(area.w);
         let label_max = (lw / cw) as usize;
         if label_max > 0 {
@@ -686,10 +725,18 @@ impl<'a> Component for Picker<'a> {
         if area.w == 0 || area.h == 0 {
             return;
         }
-        let label_style = if self.focused { Style::Focus } else { Style::Normal };
+        let label_style = if self.focused {
+            Style::Focus
+        } else {
+            Style::Normal
+        };
         let opt = self.options.get(self.selected).copied().unwrap_or("");
         // The option highlights only while editing - mirrors Counter.
-        let opt_style = if self.editing { Style::Focus } else { Style::Normal };
+        let opt_style = if self.editing {
+            Style::Focus
+        } else {
+            Style::Normal
+        };
         draw_labeled_value(target, area, self.label, label_style, opt, opt_style);
     }
 
@@ -815,7 +862,11 @@ mod tests {
         c.focus();
         let mut t = RecordingTarget::new(120, 10);
         c.view(&mut t, Area::new(0, 0, 120, 10));
-        assert!(texts(&t).iter().any(|(_, _, s, st)| s == "[ ]" && *st == Style::Focus));
+        assert!(
+            texts(&t)
+                .iter()
+                .any(|(_, _, s, st)| s == "[ ]" && *st == Style::Focus)
+        );
     }
 
     #[test]
@@ -883,7 +934,11 @@ mod tests {
         b.focus();
         let mut t = RecordingTarget::new(120, 10);
         b.view(&mut t, Area::new(0, 0, 120, 10));
-        assert!(texts(&t).iter().any(|(_, _, s, st)| s == "Go" && *st == Style::Focus));
+        assert!(
+            texts(&t)
+                .iter()
+                .any(|(_, _, s, st)| s == "Go" && *st == Style::Focus)
+        );
     }
 
     #[test]
@@ -923,14 +978,26 @@ mod tests {
         c.focus();
         let mut t = RecordingTarget::new(120, 10);
         c.view(&mut t, Area::new(0, 0, 120, 10));
-        assert!(texts(&t).iter().any(|(_, _, s, st)| s == "V" && *st == Style::Focus));
-        assert!(texts(&t).iter().any(|(_, _, s, st)| s == "0" && *st == Style::Normal));
+        assert!(
+            texts(&t)
+                .iter()
+                .any(|(_, _, s, st)| s == "V" && *st == Style::Focus)
+        );
+        assert!(
+            texts(&t)
+                .iter()
+                .any(|(_, _, s, st)| s == "0" && *st == Style::Normal)
+        );
 
         // Editing: value flips to Focus.
         c.set_editing(true);
         let mut t2 = RecordingTarget::new(120, 10);
         c.view(&mut t2, Area::new(0, 0, 120, 10));
-        assert!(texts(&t2).iter().any(|(_, _, s, st)| s == "0" && *st == Style::Focus));
+        assert!(
+            texts(&t2)
+                .iter()
+                .any(|(_, _, s, st)| s == "0" && *st == Style::Focus)
+        );
     }
 
     #[test]
@@ -972,7 +1039,11 @@ mod tests {
         t.ops()
             .iter()
             .filter_map(|op| match op {
-                Op::Bar { area, fill_permille, style } => Some((*area, *fill_permille, *style)),
+                Op::Bar {
+                    area,
+                    fill_permille,
+                    style,
+                } => Some((*area, *fill_permille, *style)),
                 _ => None,
             })
             .collect()
@@ -999,7 +1070,13 @@ mod tests {
         let mut t = RecordingTarget::new(120, 10);
         s.view(&mut t, Area::new(0, 0, 120, 10));
         // Edit cue: a Single box around the bar (visible on a 1-bit panel)…
-        assert!(t.ops().iter().any(|op| matches!(op, Op::Box { border: BorderStyle::Single, .. })));
+        assert!(t.ops().iter().any(|op| matches!(
+            op,
+            Op::Box {
+                border: BorderStyle::Single,
+                ..
+            }
+        )));
         // …and the fill is tinted Focus.
         assert!(bars(&t).iter().any(|(_, _, st)| *st == Style::Focus));
     }
@@ -1007,14 +1084,19 @@ mod tests {
     #[test]
     fn slider_not_editing_no_frame() {
         let mut t = RecordingTarget::new(120, 10);
-        Slider::new("Vol").with_value(50).view(&mut t, Area::new(0, 0, 120, 10));
+        Slider::new("Vol")
+            .with_value(50)
+            .view(&mut t, Area::new(0, 0, 120, 10));
         assert!(!t.ops().iter().any(|op| matches!(op, Op::Box { .. })));
         assert!(bars(&t).iter().all(|(_, _, st)| *st == Style::Accent));
     }
 
     #[test]
     fn slider_increment_clamps() {
-        let mut s = Slider::new("X").with_range(0, 100).with_step(10).with_value(95);
+        let mut s = Slider::new("X")
+            .with_range(0, 100)
+            .with_step(10)
+            .with_value(95);
         s.update(&Msg::Up);
         assert_eq!(s.value(), 100);
         s.update(&Msg::Up);
@@ -1039,7 +1121,11 @@ mod tests {
         Picker::new("Mode", OPTS).view(&mut t, Area::new(0, 0, 120, 10));
         assert!(texts(&t).iter().any(|(x, _, s, _)| s == "Mode" && *x == 0));
         // "Alpha" = 5 chars = 30px → right-aligned at x = 90.
-        assert!(texts(&t).iter().any(|(x, _, s, _)| s == "Alpha" && *x == 90));
+        assert!(
+            texts(&t)
+                .iter()
+                .any(|(x, _, s, _)| s == "Alpha" && *x == 90)
+        );
     }
 
     #[test]
@@ -1058,7 +1144,11 @@ mod tests {
         p.set_editing(true);
         let mut t = RecordingTarget::new(120, 10);
         p.view(&mut t, Area::new(0, 0, 120, 10));
-        assert!(texts(&t).iter().any(|(_, _, s, st)| s == "Alpha" && *st == Style::Focus));
+        assert!(
+            texts(&t)
+                .iter()
+                .any(|(_, _, s, st)| s == "Alpha" && *st == Style::Focus)
+        );
     }
 
     #[test]

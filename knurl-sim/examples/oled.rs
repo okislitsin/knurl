@@ -36,8 +36,24 @@ use knurl_sim::{Frame, SimConfig, Simulator};
 // ── Catalog data (all ASCII) ───────────────────────────────────────────────────
 
 const MENU: &[&str] = &[
-    "Text", "List", "Tree", "Table", "Bar chart", "Toggles", "Editors", "Radio", "Text input",
-    "Pager", "Indicators", "Position", "Tabs", "Status bar", "Help", "Dialog", "Form", "Layout",
+    "Text",
+    "List",
+    "Tree",
+    "Table",
+    "Bar chart",
+    "Toggles",
+    "Editors",
+    "Radio",
+    "Text input",
+    "Pager",
+    "Indicators",
+    "Position",
+    "Tabs",
+    "Status bar",
+    "Help",
+    "Dialog",
+    "Form",
+    "Layout",
     "Exit",
 ];
 const LIST_ITEMS: &[&str] = &[
@@ -83,8 +99,9 @@ const PAGER_TEXT: &[&str] = &[
     "is ever truncated.",
     "Push: go to Back.",
 ];
-const POS_ROWS: &[&str] =
-    &["Row 1", "Row 2", "Row 3", "Row 4", "Row 5", "Row 6", "Row 7", "Row 8", "Row 9", "Row 10"];
+const POS_ROWS: &[&str] = &[
+    "Row 1", "Row 2", "Row 3", "Row 4", "Row 5", "Row 6", "Row 7", "Row 8", "Row 9", "Row 10",
+];
 
 /// 0..=100 triangle wave for the live indicators / bar chart.
 fn triangle(phase: u32, offset: u32) -> u16 {
@@ -108,7 +125,13 @@ enum Row {
 /// Draws a vertical row stack scrolled by `scroll`, with a `Scrollbar` on
 /// overflow. Clears its own `area` first (it is assembled from transient pieces,
 /// so a self-clear keeps scrolling free of stale pixels).
-fn draw_stack(target: &mut dyn RenderTarget, area: Area, scroll: usize, rows: &[Row], spinner: &Spinner) {
+fn draw_stack(
+    target: &mut dyn RenderTarget,
+    area: Area,
+    scroll: usize,
+    rows: &[Row],
+    spinner: &Spinner,
+) {
     if area.w == 0 || area.h == 0 {
         return;
     }
@@ -283,8 +306,14 @@ impl Demo {
             back: Button::new("< Back"),
             chk: Checkbox::new("Logging"),
             tog: Toggle::new("Wi-Fi").with_on(true),
-            counter: Counter::new("Bright").with_range(0, 100).with_step(10).with_value(60),
-            slider: Slider::new("Vol").with_range(0, 100).with_step(10).with_value(40),
+            counter: Counter::new("Bright")
+                .with_range(0, 100)
+                .with_step(10)
+                .with_value(60),
+            slider: Slider::new("Vol")
+                .with_range(0, 100)
+                .with_step(10)
+                .with_value(40),
             picker: Picker::new("Mode", MODES),
             fan: Toggle::new("Fan"),
             level: Counter::new("Lvl").with_range(0, 5).with_value(2),
@@ -329,8 +358,12 @@ impl Demo {
             }
             Page::Editors => {
                 self.form = Form::new();
-                let mut f: [&mut dyn FormField; 4] =
-                    [&mut self.counter, &mut self.slider, &mut self.picker, &mut self.back];
+                let mut f: [&mut dyn FormField; 4] = [
+                    &mut self.counter,
+                    &mut self.slider,
+                    &mut self.picker,
+                    &mut self.back,
+                ];
                 self.form.sync_focus(&mut f);
             }
             Page::TextInputP => {
@@ -341,7 +374,8 @@ impl Demo {
             }
             Page::FormP => {
                 self.form = Form::new();
-                let mut f: [&mut dyn FormField; 3] = [&mut self.fan, &mut self.level, &mut self.back];
+                let mut f: [&mut dyn FormField; 3] =
+                    [&mut self.fan, &mut self.level, &mut self.back];
                 self.form.sync_focus(&mut f);
             }
             Page::TabsP => self.tabs.set_selected(0),
@@ -405,8 +439,12 @@ impl Demo {
             }
             Page::Editors => {
                 {
-                    let mut f: [&mut dyn FormField; 4] =
-                        [&mut self.counter, &mut self.slider, &mut self.picker, &mut self.back];
+                    let mut f: [&mut dyn FormField; 4] = [
+                        &mut self.counter,
+                        &mut self.slider,
+                        &mut self.picker,
+                        &mut self.back,
+                    ];
                     self.form.update(msg, &mut f);
                 }
                 self.pop_if_back();
@@ -430,15 +468,23 @@ impl Demo {
             // Navigable widget pages: two-zone Back (Down past the end → Back).
             Page::ListP => {
                 let before = self.list.selected();
-                if self.zone_nav(msg, before, |s| s.list.update(&Msg::Down), |s| s.list.selected())
-                {
+                if self.zone_nav(
+                    msg,
+                    before,
+                    |s| s.list.update(&Msg::Down),
+                    |s| s.list.selected(),
+                ) {
                     self.list.update(&Msg::Up);
                 }
             }
             Page::TreeP => {
                 let before = self.tree.selected();
-                if self.zone_nav(msg, before, |s| s.tree.update(&Msg::Down), |s| s.tree.selected())
-                {
+                if self.zone_nav(
+                    msg,
+                    before,
+                    |s| s.tree.update(&Msg::Down),
+                    |s| s.tree.selected(),
+                ) {
                     self.tree.update(&Msg::Up);
                 }
                 if !self.on_back && matches!(msg, Msg::Select) {
@@ -447,14 +493,24 @@ impl Demo {
             }
             Page::TableP => {
                 let before = self.table.selected();
-                self.zone_nav(msg, before, |s| s.table.update(&Msg::Down), |s| s.table.selected());
+                self.zone_nav(
+                    msg,
+                    before,
+                    |s| s.table.update(&Msg::Down),
+                    |s| s.table.selected(),
+                );
                 if matches!(msg, Msg::Up) && !self.on_back {
                     self.table.update(&Msg::Up);
                 }
             }
             Page::RadioP => {
                 let before = self.radio.cursor();
-                self.zone_nav(msg, before, |s| s.radio.update(&Msg::Down), |s| s.radio.cursor());
+                self.zone_nav(
+                    msg,
+                    before,
+                    |s| s.radio.update(&Msg::Down),
+                    |s| s.radio.cursor(),
+                );
                 if !self.on_back {
                     match msg {
                         Msg::Up => self.radio.update(&Msg::Up),
@@ -465,14 +521,24 @@ impl Demo {
             }
             Page::PagerP => {
                 let before = self.pager.offset();
-                self.zone_nav(msg, before, |s| s.pager.update(&Msg::Down), |s| s.pager.offset());
+                self.zone_nav(
+                    msg,
+                    before,
+                    |s| s.pager.update(&Msg::Down),
+                    |s| s.pager.offset(),
+                );
                 if matches!(msg, Msg::Up) && !self.on_back {
                     self.pager.update(&Msg::Up);
                 }
             }
             Page::HelpP => {
                 let before = self.help.offset();
-                self.zone_nav(msg, before, |s| s.help.update(&Msg::Down), |s| s.help.offset());
+                self.zone_nav(
+                    msg,
+                    before,
+                    |s| s.help.update(&Msg::Down),
+                    |s| s.help.offset(),
+                );
                 if matches!(msg, Msg::Up) && !self.on_back {
                     self.help.update(&Msg::Up);
                 }
@@ -529,7 +595,12 @@ impl Demo {
             // Dialog: navigate buttons, Down past the last → Back, Select confirms.
             Page::DialogP => {
                 let before = self.dialog.selected();
-                self.zone_nav(msg, before, |s| s.dialog.update(&Msg::Down), |s| s.dialog.selected());
+                self.zone_nav(
+                    msg,
+                    before,
+                    |s| s.dialog.update(&Msg::Down),
+                    |s| s.dialog.selected(),
+                );
                 if !self.on_back {
                     match msg {
                         Msg::Up => self.dialog.update(&Msg::Up),
@@ -646,7 +717,8 @@ impl Demo {
                 self.form.view(target, body, &f);
             }
             Page::Editors => {
-                let f: [&dyn FormField; 4] = [&self.counter, &self.slider, &self.picker, &self.back];
+                let f: [&dyn FormField; 4] =
+                    [&self.counter, &self.slider, &self.picker, &self.back];
                 self.form.view(target, body, &f);
             }
             Page::TextInputP => {
@@ -673,13 +745,20 @@ impl Demo {
                     ("Net", s.chan[2]),
                     ("Dsk", s.chan[3]),
                 ];
-                BarChart::new(&data).with_label_width(24).with_max(100).view(t, a);
+                BarChart::new(&data)
+                    .with_label_width(24)
+                    .with_max(100)
+                    .view(t, a);
             }),
 
             Page::TabsP => self.body_with_back(target, body, |s, t, a| s.view_tabs(t, a)),
             Page::StatusBarP => self.body_with_back(target, body, |_s, t, a| {
                 let row = Area::new(a.x, a.y, a.w, t.line_height());
-                StatusBar::new().with_left("L").with_center("CTR").with_right("R").view(t, row);
+                StatusBar::new()
+                    .with_left("L")
+                    .with_center("CTR")
+                    .with_right("R")
+                    .view(t, row);
             }),
             Page::Layout => self.body_with_back(target, body, |s, t, a| s.view_layout(t, a)),
 
@@ -694,7 +773,13 @@ impl Demo {
             Page::Indicators => {
                 let [stack, back] = VStack::split(body, &[Fill(1), Length(lh)]);
                 self.vis.set((stack.h / lh) as usize);
-                draw_stack(target, stack, self.scroll, &self.rows_indicators(), &self.spinner);
+                draw_stack(
+                    target,
+                    stack,
+                    self.scroll,
+                    &self.rows_indicators(),
+                    &self.spinner,
+                );
                 self.draw_back(target, back);
             }
         }
@@ -714,30 +799,41 @@ impl Demo {
     }
 
     fn draw_back(&self, target: &mut dyn RenderTarget, area: Area) {
-        let style = if self.on_back { Style::Focus } else { Style::Muted };
+        let style = if self.on_back {
+            Style::Focus
+        } else {
+            Style::Muted
+        };
         Label::new("< Back").with_style(style).view(target, area);
     }
 
     fn view_tabs(&self, target: &mut dyn RenderTarget, area: Area) {
         let lh = target.line_height().max(1);
-        self.tabs.view(target, Area::new(area.x, area.y, area.w, lh));
+        self.tabs
+            .view(target, Area::new(area.x, area.y, area.w, lh));
         let tab = self.tabs.selected().min(2);
         for (i, item) in TAB_CONTENT[tab].iter().enumerate() {
             let y = area.y + lh + i as u16 * lh;
-            Label::new(item).with_style(Style::Normal).view(target, Area::new(area.x, y, area.w, lh));
+            Label::new(item)
+                .with_style(Style::Normal)
+                .view(target, Area::new(area.x, y, area.w, lh));
         }
     }
 
     fn view_layout(&self, target: &mut dyn RenderTarget, area: Area) {
         let lh = target.line_height().max(1);
         let [top, mid, bot] = VStack::split(area, &[Length(lh), Fill(1), Length(lh)]);
-        Label::new("VStack top").with_style(Style::Accent).view(target, top);
+        Label::new("VStack top")
+            .with_style(Style::Accent)
+            .view(target, top);
         let [l, r] = HStack::split(mid, &[Fill(1), Fill(1)]);
         target.draw_box(l, BorderStyle::Rounded);
         target.draw_box(r, BorderStyle::Rounded);
         Padded::new(Label::new("L"), Padding::uniform(2)).view(target, l);
         Padded::new(Label::new("R"), Padding::uniform(2)).view(target, r);
-        Label::new("HStack/box").with_style(Style::Accent).view(target, bot);
+        Label::new("HStack/box")
+            .with_style(Style::Accent)
+            .view(target, bot);
     }
 
     fn view_position(&self, target: &mut dyn RenderTarget, area: Area) {
@@ -754,14 +850,29 @@ impl Demo {
             let style = if r == 0 { Style::Focus } else { Style::Muted };
             Label::new(POS_ROWS[idx]).with_style(style).view(
                 target,
-                Area::new(rows_area.x, rows_area.y + r as u16 * lh, rows_area.w.saturating_sub(4), lh),
+                Area::new(
+                    rows_area.x,
+                    rows_area.y + r as u16 * lh,
+                    rows_area.w.saturating_sub(4),
+                    lh,
+                ),
             );
         }
         let mut sb = Scrollbar::new();
         sb.set(POS_ROWS.len(), visible, self.pos_offset);
-        sb.view(target, Area::new(rows_area.x + rows_area.w - 3, rows_area.y, 3, visible as u16 * lh));
+        sb.view(
+            target,
+            Area::new(
+                rows_area.x + rows_area.w - 3,
+                rows_area.y,
+                3,
+                visible as u16 * lh,
+            ),
+        );
         let pages = POS_ROWS.len() - visible + 1;
-        Paginator::new(pages).with_current(self.pos_offset).view(target, pag_row);
+        Paginator::new(pages)
+            .with_current(self.pos_offset)
+            .view(target, pag_row);
     }
 
     fn rows_text(&self) -> [Row; 9] {

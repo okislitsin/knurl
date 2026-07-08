@@ -183,7 +183,11 @@ impl<'a, M: ListModel + ?Sized> Component for List<'a, M> {
 
         // Reserve space on the right for the scroll indicator only when needed.
         let overflowing = n > visible;
-        let bar_w = if overflowing { SCROLLBAR_W + SCROLLBAR_GAP } else { 0 };
+        let bar_w = if overflowing {
+            SCROLLBAR_W + SCROLLBAR_GAP
+        } else {
+            0
+        };
         let content_w = area.w.saturating_sub(bar_w);
 
         // The leftmost columns are reserved for the selection-marker prefix.
@@ -202,7 +206,11 @@ impl<'a, M: ListModel + ?Sized> Component for List<'a, M> {
             let is_sel = item_idx == self.selected;
             // Charm look: the selected row is Focus, the rest are dimmed (Muted).
             let style = if is_sel { Style::Focus } else { Style::Muted };
-            let prefix = if is_sel { self.marker.selected } else { self.marker.unselected };
+            let prefix = if is_sel {
+                self.marker.selected
+            } else {
+                self.marker.unselected
+            };
 
             if !prefix.is_empty() {
                 target.draw_text(area.x, y, prefix, style);
@@ -266,7 +274,10 @@ impl<'a, M: ListModel + ?Sized> List<'a, M> {
             .checked_div(max_off)
             .unwrap_or(0) as u16;
         let thumb_y = area.y + progress;
-        target.fill_rect(Area::new(band_x, thumb_y, SCROLLBAR_W, thumb_h), Style::Focus);
+        target.fill_rect(
+            Area::new(band_x, thumb_y, SCROLLBAR_W, thumb_h),
+            Style::Focus,
+        );
     }
 }
 
@@ -353,7 +364,11 @@ mod tests {
         // Row 2: "Gamma" at y=20.
         assert!(drawn.contains(&(12, 20, "Gamma", Style::Muted)));
         // Delta/Epsilon are below the fold → not drawn.
-        assert!(!drawn.iter().any(|&(_, _, s, _)| s == "Delta" || s == "Epsilon"));
+        assert!(
+            !drawn
+                .iter()
+                .any(|&(_, _, s, _)| s == "Delta" || s == "Epsilon")
+        );
     }
 
     #[test]
@@ -462,7 +477,10 @@ mod tests {
         list.view(&mut t, Area::new(0, 0, 120, 30));
         let f: Vec<_> = fills(&t).collect();
         // Two fills: a Muted track and a Focus thumb, both at the right edge.
-        assert!(f.iter().any(|&(a, st)| st == Style::Muted && a.w == TRACK_W && a.h == 30));
+        assert!(
+            f.iter()
+                .any(|&(a, st)| st == Style::Muted && a.w == TRACK_W && a.h == 30)
+        );
         let thumb = f.iter().find(|&&(_, st)| st == Style::Focus);
         let (ta, _) = thumb.expect("thumb fill present");
         assert_eq!(ta.w, SCROLLBAR_W);

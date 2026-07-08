@@ -266,7 +266,10 @@ mod tests {
 
     #[test]
     fn vstack_mixed_length_and_fill() {
-        let out = VStack::split(Area::new(0, 0, 100, 100), &[Length(20), Fill(1), Length(30)]);
+        let out = VStack::split(
+            Area::new(0, 0, 100, 100),
+            &[Length(20), Fill(1), Length(30)],
+        );
         assert_eq!(
             out,
             [
@@ -361,7 +364,9 @@ mod tests {
     fn bordered_compactness_vs_old_cell_model() {
         // A 1px border must leave a (w-2, h-2) pixel interior - not shrink by
         // a font row/column.
-        let inner = Area::new(0, 0, 100, 40).inner_by(BorderStyle::Single.thickness()).unwrap();
+        let inner = Area::new(0, 0, 100, 40)
+            .inner_by(BorderStyle::Single.thickness())
+            .unwrap();
         assert_eq!(inner, Area::new(1, 1, 98, 38));
     }
 
