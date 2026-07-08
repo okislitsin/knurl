@@ -26,7 +26,7 @@ pub use dialog::Dialog;
 pub use form::{Form, FormField};
 pub use help::Help;
 pub use info::{LineGauge, Paginator, ProgressBar, Scrollbar, Spinner, SpinnerStyle};
-pub use interactive::{Button, Checkbox, Counter, Picker, Slider, Toggle};
+pub use interactive::{Button, Checkbox, Counter, Picker, PickerItem, Slider, Toggle};
 pub use layout::{Bordered, Constraint, HStack, Padded, VStack};
 pub use list::{List, ListModel};
 pub use pager::{LinesModel, Pager};
