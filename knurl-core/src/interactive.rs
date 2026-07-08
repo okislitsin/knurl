@@ -626,15 +626,27 @@ impl<'a> Component for Slider<'a> {
     }
 }
 
+// ── PickerItem ──────────────────────────────────────────────────────────────
+
+pub trait PickerItem {
+    fn as_str(&self) -> &str;
+}
+
+impl PickerItem for &str {
+    fn as_str(&self) -> &str {
+        self
+    }
+}
+
 // ── Picker ──────────────────────────────────────────────────────────────────
 
 /// A labelled inline picker that cycles through a fixed list of options. The
 /// option is shown right-aligned (like [`Counter`]); it highlights `Focus` only
 /// while editing.
 #[derive(Debug)]
-pub struct Picker<'a> {
+pub struct Picker<'a, T: PickerItem = &'a str> {
     label: &'a str,
-    options: &'a [&'a str],
+    options: &'a [T],
     selected: usize,
     wrap: bool,
     focused: bool,
@@ -642,8 +654,8 @@ pub struct Picker<'a> {
     dirty: Cell<bool>,
 }
 
-impl<'a> Picker<'a> {
-    pub fn new(label: &'a str, options: &'a [&'a str]) -> Self {
+impl<'a, T: PickerItem> Picker<'a, T> {
+    pub fn new(label: &'a str, options: &'a [T]) -> Self {
         Self {
             label,
             options,
@@ -671,8 +683,11 @@ impl<'a> Picker<'a> {
     }
 
     /// The currently selected option, or `""` when there are no options.
-    pub fn selected_option(&self) -> &'a str {
-        self.options.get(self.selected).copied().unwrap_or("")
+    pub fn selected_option(&self) -> Option<T>
+    where
+        T: Copy,
+    {
+        self.options.get(self.selected).copied()
     }
 
     /// Sets the selected index, clamped into `[0, len - 1]`.
@@ -1132,7 +1147,7 @@ mod tests {
     fn picker_next_and_wrap() {
         let mut p = Picker::new("M", OPTS);
         p.update(&Msg::Down);
-        assert_eq!(p.selected_option(), "Beta");
+        assert_eq!(p.selected_option(), Option::Some("Beta"));
         let mut p2 = Picker::new("M", OPTS);
         p2.update(&Msg::Up);
         assert_eq!(p2.selected(), 2); // wrapped
@@ -1155,6 +1170,6 @@ mod tests {
     fn picker_empty_safe() {
         let mut p = Picker::new("M", &[]);
         p.update(&Msg::Down);
-        assert_eq!(p.selected_option(), "");
+        assert_eq!(p.selected_option(), Option::<&str>::None);
     }
 }
