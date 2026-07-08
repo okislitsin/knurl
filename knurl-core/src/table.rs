@@ -117,7 +117,14 @@ impl<'a, M: TableModel + ?Sized> Table<'a, M> {
     }
 
     /// Draws one row of cells across the columns at pixel-row `y`.
-    fn draw_cells(&self, target: &mut dyn RenderTarget, area: Area, y: u16, r: usize, style: Style) {
+    fn draw_cells(
+        &self,
+        target: &mut dyn RenderTarget,
+        area: Area,
+        y: u16,
+        r: usize,
+        style: Style,
+    ) {
         let cw = target.char_width().max(1);
         let cols = self.model.col_count();
         for c in 0..cols {
@@ -192,7 +199,10 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
                 }
             }
             let underline_w = content_right.saturating_sub(area.x);
-            target.fill_rect(Area::new(area.x, area.y + line_h - 1, underline_w, 1), Style::Muted);
+            target.fill_rect(
+                Area::new(area.x, area.y + line_h - 1, underline_w, 1),
+                Style::Muted,
+            );
         }
 
         // Data rows.
@@ -202,7 +212,11 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
                 break;
             }
             let y = area.y + header_h + row as u16 * line_h;
-            let style = if idx == self.selected { Style::Focus } else { Style::Normal };
+            let style = if idx == self.selected {
+                Style::Focus
+            } else {
+                Style::Normal
+            };
             self.draw_cells(target, area, y, idx, style);
         }
 
@@ -269,9 +283,17 @@ mod tests {
         assert!(tx.contains(&(0, 0, "Name".into(), Style::Accent)));
         assert!(tx.contains(&(42, 0, "Val".into(), Style::Accent)));
         // 1px vertical separator between the two columns at x = 33.
-        assert!(fills(&t).iter().any(|(a, st)| a.w == 1 && a.x == 39 && *st == Style::Muted));
+        assert!(
+            fills(&t)
+                .iter()
+                .any(|(a, st)| a.w == 1 && a.x == 39 && *st == Style::Muted)
+        );
         // 1px header underline along the bottom of the header row (y = 9).
-        assert!(fills(&t).iter().any(|(a, st)| a.h == 1 && a.y == 9 && *st == Style::Muted));
+        assert!(
+            fills(&t)
+                .iter()
+                .any(|(a, st)| a.h == 1 && a.y == 9 && *st == Style::Muted)
+        );
         // No '|' or '-' characters anywhere.
         assert!(!tx.iter().any(|(_, _, s, _)| s == "|" || s == "-"));
     }
@@ -282,9 +304,17 @@ mod tests {
         let mut t = RecordingTarget::new(80, 50);
         table.view(&mut t, Area::new(0, 0, 80, 50));
         // Row 0 selected by default → "Alpha" at y = 10 (after header) in Focus.
-        assert!(texts(&t).iter().any(|(x, y, s, st)| *x == 0 && *y == 10 && s == "Alpha" && *st == Style::Focus));
+        assert!(
+            texts(&t)
+                .iter()
+                .any(|(x, y, s, st)| *x == 0 && *y == 10 && s == "Alpha" && *st == Style::Focus)
+        );
         // Row 1 not selected → Normal.
-        assert!(texts(&t).iter().any(|(_, y, s, st)| *y == 20 && s == "Beta" && *st == Style::Normal));
+        assert!(
+            texts(&t)
+                .iter()
+                .any(|(_, y, s, st)| *y == 20 && s == "Beta" && *st == Style::Normal)
+        );
     }
 
     #[test]
@@ -292,7 +322,11 @@ mod tests {
         let table = Table::new(ROWS, WIDTHS);
         let mut t = RecordingTarget::new(80, 50);
         table.view(&mut t, Area::new(0, 0, 80, 50));
-        assert!(texts(&t).iter().any(|(x, y, s, _)| *x == 0 && *y == 0 && s == "Alpha"));
+        assert!(
+            texts(&t)
+                .iter()
+                .any(|(x, y, s, _)| *x == 0 && *y == 0 && s == "Alpha")
+        );
     }
 
     #[test]
@@ -316,7 +350,11 @@ mod tests {
         let mut t2 = RecordingTarget::new(80, 20);
         table.view(&mut t2, Area::new(0, 0, 80, 20));
         // Gamma (row 2) is now visible and focused.
-        assert!(texts(&t2).iter().any(|(_, _, s, st)| s == "Gamma" && *st == Style::Focus));
+        assert!(
+            texts(&t2)
+                .iter()
+                .any(|(_, _, s, st)| s == "Gamma" && *st == Style::Focus)
+        );
     }
 
     /// A custom model: cells computed outside the widget.

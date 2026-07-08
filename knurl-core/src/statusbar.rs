@@ -24,7 +24,12 @@ pub struct StatusBar<'a> {
 
 impl<'a> StatusBar<'a> {
     pub const fn new() -> Self {
-        Self { left: "", center: "", right: "", style: Style::Muted }
+        Self {
+            left: "",
+            center: "",
+            right: "",
+            style: Style::Muted,
+        }
     }
 
     pub const fn with_left(mut self, s: &'a str) -> Self {
@@ -138,13 +143,19 @@ mod tests {
         // "OK" = 2*6 = 12px → right-aligned at x = 120 - 12 = 108.
         assert!(tx.contains(&(108, 2, "OK".into(), Style::Muted)));
         // The 1px top rule is present.
-        assert!(t.ops().iter().any(|op| matches!(op, Op::Fill { area, .. } if area.h == 1 && area.y == 0)));
+        assert!(
+            t.ops()
+                .iter()
+                .any(|op| matches!(op, Op::Fill { area, .. } if area.h == 1 && area.y == 0))
+        );
     }
 
     #[test]
     fn statusbar_center() {
         let mut t = RecordingTarget::new(120, 12);
-        StatusBar::new().with_center("MID").view(&mut t, Area::new(0, 0, 120, 12));
+        StatusBar::new()
+            .with_center("MID")
+            .view(&mut t, Area::new(0, 0, 120, 12));
         // "MID" = 18px → x = (120 - 18) / 2 = 51.
         assert!(texts(&t).iter().any(|(x, _, s, _)| *x == 51 && s == "MID"));
     }
@@ -155,6 +166,12 @@ mod tests {
         StatusBar::new().view(&mut t, Area::new(0, 0, 80, 12));
         // Only the rule, no text.
         assert!(!t.ops().iter().any(|op| matches!(op, Op::Text { .. })));
-        assert_eq!(t.ops().iter().filter(|op| matches!(op, Op::Fill { .. })).count(), 1);
+        assert_eq!(
+            t.ops()
+                .iter()
+                .filter(|op| matches!(op, Op::Fill { .. }))
+                .count(),
+            1
+        );
     }
 }

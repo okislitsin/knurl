@@ -78,7 +78,10 @@ pub struct Form {
 
 impl Form {
     pub const fn new() -> Self {
-        Self { focus: 0, editing: false }
+        Self {
+            focus: 0,
+            editing: false,
+        }
     }
 
     /// Index of the currently focused field.
@@ -201,7 +204,11 @@ impl Form {
         }
 
         // Reserve a thin column for the scroll indicator only when overflowing.
-        let bar_w = if overflowing { SCROLLBAR_W + SCROLLBAR_GAP } else { 0 };
+        let bar_w = if overflowing {
+            SCROLLBAR_W + SCROLLBAR_GAP
+        } else {
+            0
+        };
         let content_w = area.w.saturating_sub(bar_w);
 
         // Pass 2: place each field at its cumulative top minus the scroll offset,
@@ -243,9 +250,11 @@ impl Form {
             .max(MIN_THUMB_PX)
             .min(track_h);
         let max_scroll = total - area.h;
-        let progress =
-            ((track_h - thumb_h) as u32 * scroll as u32 / max_scroll as u32) as u16;
-        target.fill_rect(Area::new(band_x, area.y + progress, SCROLLBAR_W, thumb_h), Style::Focus);
+        let progress = ((track_h - thumb_h) as u32 * scroll as u32 / max_scroll as u32) as u16;
+        target.fill_rect(
+            Area::new(band_x, area.y + progress, SCROLLBAR_W, thumb_h),
+            Style::Focus,
+        );
     }
 }
 
@@ -363,7 +372,10 @@ mod tests {
     #[test]
     fn form_counter_edit_mode() {
         let mut cb = Checkbox::new("A");
-        let mut ct = Counter::new("X").with_range(0, 100).with_step(10).with_value(50);
+        let mut ct = Counter::new("X")
+            .with_range(0, 100)
+            .with_step(10)
+            .with_value(50);
         let mut form = Form::new();
         {
             let mut fields: [&mut dyn FormField; 2] = [&mut cb, &mut ct];
@@ -506,10 +518,14 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(fills.iter().any(|&(a, st)| st == crate::Style::Muted && a.w == TRACK_W));
-        assert!(fills
-            .iter()
-            .any(|&(a, st)| st == crate::Style::Focus && a.w == SCROLLBAR_W && a.x == 120 - SCROLLBAR_W));
+        assert!(
+            fills
+                .iter()
+                .any(|&(a, st)| st == crate::Style::Muted && a.w == TRACK_W)
+        );
+        assert!(fills.iter().any(|&(a, st)| st == crate::Style::Focus
+            && a.w == SCROLLBAR_W
+            && a.x == 120 - SCROLLBAR_W));
     }
 
     #[test]

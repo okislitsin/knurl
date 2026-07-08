@@ -66,7 +66,12 @@ pub struct Spinner {
 
 impl Spinner {
     pub const fn new() -> Self {
-        Self { style: SpinnerStyle::Line, frame: 0, label: None, dirty: Cell::new(true) }
+        Self {
+            style: SpinnerStyle::Line,
+            frame: 0,
+            label: None,
+            dirty: Cell::new(true),
+        }
     }
 
     pub const fn with_style(mut self, style: SpinnerStyle) -> Self {
@@ -109,7 +114,11 @@ impl Component for Spinner {
             return;
         }
         let cw = target.char_width().max(1);
-        target.draw_spinner(Area::new(area.x, area.y, cw, area.h), self.frame_char(), Style::Accent);
+        target.draw_spinner(
+            Area::new(area.x, area.y, cw, area.h),
+            self.frame_char(),
+            Style::Accent,
+        );
         if let Some(lbl) = self.label {
             let label_x = area.x.saturating_add(2 * cw);
             if label_x < area.x + area.w {
@@ -254,7 +263,11 @@ impl Component for LineGauge {
         let bar_w = area.w.saturating_sub(pct_px + cw); // +1 char gap
 
         if bar_w > 0 {
-            target.draw_bar(Area::new(area.x, area.y, bar_w, area.h), permille, Style::Accent);
+            target.draw_bar(
+                Area::new(area.x, area.y, bar_w, area.h),
+                permille,
+                Style::Accent,
+            );
         }
         if pct_px <= area.w {
             let px = area.x + area.w - pct_px;
@@ -281,7 +294,11 @@ pub struct Scrollbar {
 
 impl Scrollbar {
     pub const fn new() -> Self {
-        Self { total: 0, window: 0, offset: 0 }
+        Self {
+            total: 0,
+            window: 0,
+            offset: 0,
+        }
     }
 
     /// Updates the scroll geometry - call once per frame from the view.
@@ -326,7 +343,11 @@ pub struct Paginator {
 
 impl Paginator {
     pub const fn new(pages: usize) -> Self {
-        Self { pages, current: 0, numeric: false }
+        Self {
+            pages,
+            current: 0,
+            numeric: false,
+        }
     }
 
     pub const fn with_numeric(mut self, numeric: bool) -> Self {
@@ -398,8 +419,16 @@ impl Component for Paginator {
                 if cx + step > area.x + area.w {
                     break;
                 }
-                let style = if i == self.current { Style::Accent } else { Style::Muted };
-                target.draw_radio(Area::new(cx, area.y, step, area.h), i == self.current, style);
+                let style = if i == self.current {
+                    Style::Accent
+                } else {
+                    Style::Muted
+                };
+                target.draw_radio(
+                    Area::new(cx, area.y, step, area.h),
+                    i == self.current,
+                    style,
+                );
             }
         }
     }
@@ -432,7 +461,11 @@ mod tests {
         t.ops()
             .iter()
             .filter_map(|op| match op {
-                Op::Bar { area, fill_permille, style } => Some((*area, *fill_permille, *style)),
+                Op::Bar {
+                    area,
+                    fill_permille,
+                    style,
+                } => Some((*area, *fill_permille, *style)),
                 _ => None,
             })
             .collect()
@@ -485,7 +518,9 @@ mod tests {
     #[test]
     fn spinner_label() {
         let mut t = RecordingTarget::new(60, 10);
-        Spinner::new().with_label("Go").view(&mut t, Area::new(0, 0, 60, 10));
+        Spinner::new()
+            .with_label("Go")
+            .view(&mut t, Area::new(0, 0, 60, 10));
         assert!(texts(&t).iter().any(|(x, _, s, _)| *x == 12 && s == "Go"));
     }
 
@@ -571,7 +606,10 @@ mod tests {
         s2.set(10, 3, 7); // max offset
         let mut t2 = RecordingTarget::new(4, 30);
         s2.view(&mut t2, Area::new(0, 0, 4, 30));
-        let thumb2 = fills(&t2).into_iter().find(|(_, st)| *st == Style::Focus).unwrap();
+        let thumb2 = fills(&t2)
+            .into_iter()
+            .find(|(_, st)| *st == Style::Focus)
+            .unwrap();
         assert!(thumb2.0.y > 0); // moved down
     }
 
@@ -583,14 +621,24 @@ mod tests {
         Paginator::new(3).view(&mut t, Area::new(0, 0, 60, 10));
         // draw_radio symbolic default: current "(*)" Accent, others "( )" Muted.
         let tx = texts(&t);
-        assert!(tx.iter().any(|(x, _, s, st)| *x == 0 && s == "(*)" && *st == Style::Accent));
-        assert!(tx.iter().filter(|(_, _, s, st)| s == "( )" && *st == Style::Muted).count() == 2);
+        assert!(
+            tx.iter()
+                .any(|(x, _, s, st)| *x == 0 && s == "(*)" && *st == Style::Accent)
+        );
+        assert!(
+            tx.iter()
+                .filter(|(_, _, s, st)| s == "( )" && *st == Style::Muted)
+                .count()
+                == 2
+        );
     }
 
     #[test]
     fn paginator_current_moves() {
         let mut t = RecordingTarget::new(60, 10);
-        Paginator::new(3).with_current(1).view(&mut t, Area::new(0, 0, 60, 10));
+        Paginator::new(3)
+            .with_current(1)
+            .view(&mut t, Area::new(0, 0, 60, 10));
         // Dot 1 (x = 10) is the filled one.
         assert!(texts(&t).iter().any(|(x, _, s, _)| *x == 10 && s == "(*)"));
     }
@@ -598,7 +646,10 @@ mod tests {
     #[test]
     fn paginator_numeric() {
         let mut t = RecordingTarget::new(60, 10);
-        Paginator::new(5).with_numeric(true).with_current(1).view(&mut t, Area::new(0, 0, 60, 10));
+        Paginator::new(5)
+            .with_numeric(true)
+            .with_current(1)
+            .view(&mut t, Area::new(0, 0, 60, 10));
         let tx = texts(&t);
         assert!(tx.iter().any(|(x, _, s, _)| *x == 0 && s == "2"));
         assert!(tx.iter().any(|(_, _, s, _)| s == "/"));

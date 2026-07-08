@@ -85,7 +85,11 @@ pub struct BarChart<'a, M: BarChartModel + ?Sized = [(&'a str, u16)]> {
 
 impl<'a, M: BarChartModel + ?Sized> BarChart<'a, M> {
     pub fn new(model: &'a M) -> Self {
-        Self { model, max: 0, label_w: 36 }
+        Self {
+            model,
+            max: 0,
+            label_w: 36,
+        }
     }
 
     /// Sets the value mapped to a full-width bar. `0` means auto-scale to the
@@ -143,7 +147,12 @@ impl<'a, M: BarChartModel + ?Sized> Component for BarChart<'a, M> {
             let y = area.y.saturating_add(row as u16 * line_h);
             let value = self.model.value(row);
 
-            target.draw_text(area.x, y, truncate(self.model.label(row), (label_w / cw) as usize), Style::Normal);
+            target.draw_text(
+                area.x,
+                y,
+                truncate(self.model.label(row), (label_w / cw) as usize),
+                Style::Normal,
+            );
 
             if bar_w > 0 {
                 let permille = (value as u32 * 1000 / effective_max.max(1) as u32) as u16;
@@ -188,7 +197,11 @@ mod tests {
         t.ops()
             .iter()
             .filter_map(|op| match op {
-                Op::Bar { area, fill_permille, style } => Some((*area, *fill_permille, *style)),
+                Op::Bar {
+                    area,
+                    fill_permille,
+                    style,
+                } => Some((*area, *fill_permille, *style)),
                 _ => None,
             })
             .collect()
@@ -205,7 +218,10 @@ mod tests {
         let bs = bars(&t);
         // Labels left, values Muted right-aligned.
         assert!(tx.contains(&(0, 0, "Alpha".into(), Style::Normal)));
-        assert!(tx.iter().any(|(x, y, s, st)| *y == 0 && *x == 108 && s == "10" && *st == Style::Muted));
+        assert!(
+            tx.iter()
+                .any(|(x, y, s, st)| *y == 0 && *x == 108 && s == "10" && *st == Style::Muted)
+        );
         // Row 0 full (10/10 = 1000), row 1 half (5/10 = 500); on disjoint rows.
         assert!(bs.contains(&(Area::new(36, 0, 66, 10), 1000, Style::Accent)));
         assert!(bs.contains(&(Area::new(36, 10, 66, 10), 500, Style::Accent)));
@@ -226,7 +242,11 @@ mod tests {
         let chart = BarChart::new(DATA);
         let mut t = RecordingTarget::new(120, 30);
         chart.view(&mut t, Area::new(0, 0, 120, 30));
-        assert!(!texts(&t).iter().any(|(_, _, s, _)| s.contains('#') || s.contains('|')));
+        assert!(
+            !texts(&t)
+                .iter()
+                .any(|(_, _, s, _)| s.contains('#') || s.contains('|'))
+        );
     }
 
     /// A custom model (computed outside the widget).

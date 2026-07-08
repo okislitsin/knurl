@@ -87,7 +87,12 @@ impl<'a> Component for Help<'a> {
             }
             let y = area.y.saturating_add(row as u16 * line_h);
             let (key, action) = self.items[idx];
-            target.draw_text(area.x, y, truncate(key, (key_w / cw) as usize), Style::Accent);
+            target.draw_text(
+                area.x,
+                y,
+                truncate(key, (key_w / cw) as usize),
+                Style::Accent,
+            );
             if action_w > 0 {
                 target.draw_text(
                     area.x + key_w,

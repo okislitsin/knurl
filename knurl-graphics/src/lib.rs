@@ -66,13 +66,21 @@ where
         let dot = col_w.min(row_h).saturating_sub(1).max(1);
         // (bit, col, row) - standard 8-dot Braille layout.
         const MAP: [(u8, u32, u32); 8] = [
-            (0x01, 0, 0), (0x02, 0, 1), (0x04, 0, 2), (0x40, 0, 3),
-            (0x08, 1, 0), (0x10, 1, 1), (0x20, 1, 2), (0x80, 1, 3),
+            (0x01, 0, 0),
+            (0x02, 0, 1),
+            (0x04, 0, 2),
+            (0x40, 0, 3),
+            (0x08, 1, 0),
+            (0x10, 1, 1),
+            (0x20, 1, 2),
+            (0x80, 1, 3),
         ];
         for (bit, cx, ry) in MAP {
             if bits & bit != 0 {
                 let p = tl + Point::new((cx * col_w) as i32, (ry * row_h) as i32);
-                let _ = Rectangle::new(p, Size::new(dot, dot)).into_styled(fill).draw(display);
+                let _ = Rectangle::new(p, Size::new(dot, dot))
+                    .into_styled(fill)
+                    .draw(display);
             }
         }
         true
@@ -80,7 +88,9 @@ where
         // Pulse/Meter: a centred square scaled by the shade fraction.
         let side = (w.min(h) * quarters / 4).max(1);
         let p = tl + Point::new(((w - side) / 2) as i32, ((h - side) / 2) as i32);
-        let _ = Rectangle::new(p, Size::new(side, side)).into_styled(fill).draw(display);
+        let _ = Rectangle::new(p, Size::new(side, side))
+            .into_styled(fill)
+            .draw(display);
         true
     } else {
         false
@@ -93,9 +103,17 @@ fn expander_triangle(top: Point, s: u32, expanded: bool) -> Triangle {
     let s = s as i32;
     let (x, y) = (top.x, top.y);
     if expanded {
-        Triangle::new(Point::new(x, y), Point::new(x + s, y), Point::new(x + s / 2, y + s))
+        Triangle::new(
+            Point::new(x, y),
+            Point::new(x + s, y),
+            Point::new(x + s / 2, y + s),
+        )
     } else {
-        Triangle::new(Point::new(x, y), Point::new(x, y + s), Point::new(x + s, y + s / 2))
+        Triangle::new(
+            Point::new(x, y),
+            Point::new(x, y + s),
+            Point::new(x + s, y + s / 2),
+        )
     }
 }
 
@@ -132,7 +150,11 @@ impl Theme {
     /// (so focus is visible on a monochrome display), no blinking,
     /// `blink_on = true`.
     pub const fn new() -> Self {
-        Self { inverted: Self::INVERTED | Self::FOCUS, blink: 0, blink_on: true }
+        Self {
+            inverted: Self::INVERTED | Self::FOCUS,
+            blink: 0,
+            blink_on: true,
+        }
     }
 
     /// Sets the mask of styles drawn inverted.
@@ -208,7 +230,11 @@ pub struct GraphicsTarget<'a, D> {
 
 impl<'a, D: DrawTarget<Color = BinaryColor>> GraphicsTarget<'a, D> {
     pub fn new(display: &'a mut D, font: MonoFont<'static>) -> Self {
-        Self { display, font, theme: Theme::new() }
+        Self {
+            display,
+            font,
+            theme: Theme::new(),
+        }
     }
 
     /// Sets the [`Theme`] controlling per-style inversion and blinking.
@@ -231,7 +257,10 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> GraphicsTarget<'a, D> {
 
     /// The pixel `Rectangle` for `area`, offset by the display origin.
     fn px_rect(&self, area: Area) -> Rectangle {
-        Rectangle::new(self.px_point(area.x, area.y), Size::new(area.w as u32, area.h as u32))
+        Rectangle::new(
+            self.px_point(area.x, area.y),
+            Size::new(area.w as u32, area.h as u32),
+        )
     }
 
     /// Access to the underlying `DrawTarget` for pixel-level widget drawing.
@@ -316,7 +345,9 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
 
             BorderStyle::Single => {
                 let style = PrimitiveStyle::with_stroke(BinaryColor::On, 1);
-                let _ = Rectangle::new(top_left, size).into_styled(style).draw(self.display);
+                let _ = Rectangle::new(top_left, size)
+                    .into_styled(style)
+                    .draw(self.display);
             }
 
             BorderStyle::Rounded => {
@@ -332,12 +363,16 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
 
             BorderStyle::Thick => {
                 let style = PrimitiveStyle::with_stroke(BinaryColor::On, 2);
-                let _ = Rectangle::new(top_left, size).into_styled(style).draw(self.display);
+                let _ = Rectangle::new(top_left, size)
+                    .into_styled(style)
+                    .draw(self.display);
             }
 
             BorderStyle::Double => {
                 let stroke = PrimitiveStyle::with_stroke(BinaryColor::On, 1);
-                let _ = Rectangle::new(top_left, size).into_styled(stroke).draw(self.display);
+                let _ = Rectangle::new(top_left, size)
+                    .into_styled(stroke)
+                    .draw(self.display);
 
                 // Inner line inset by 2 px on every side - only if there is room
                 // for both lines plus at least 1 px interior.
@@ -554,8 +589,8 @@ impl ColorTheme<Rgb565> {
             inverted: (lilac, dark_grey), // selection
             accent: (accent, bg),         // accent text, not a block
             muted: (muted, bg),
-            danger: (danger, bg),         // danger text, not a block
-            focus: (lilac, dark_grey),    // selection focus
+            danger: (danger, bg),      // danger text, not a block
+            focus: (lilac, dark_grey), // selection focus
         }
     }
 
@@ -571,13 +606,13 @@ impl ColorTheme<Rgb565> {
     /// | `Inverted` | `#E5E9F0` snow | `#434C5E` night |
     /// | `Danger`   | `#BF616A` red (text)  | `#2E3440` polar |
     pub fn nord() -> Self {
-        let text = Rgb565::new(27, 55, 29);       // #D8DEE9
-        let bg = Rgb565::new(5, 13, 8);           // #2E3440
-        let muted = Rgb565::new(9, 21, 13);       // #4C566A
-        let accent = Rgb565::new(17, 48, 26);     // #88C0D0
-        let snow = Rgb565::new(28, 58, 30);       // #E5E9F0
-        let dark_grey = Rgb565::new(8, 19, 11);   // #434C5E
-        let danger = Rgb565::new(23, 24, 13);     // #BF616A
+        let text = Rgb565::new(27, 55, 29); // #D8DEE9
+        let bg = Rgb565::new(5, 13, 8); // #2E3440
+        let muted = Rgb565::new(9, 21, 13); // #4C566A
+        let accent = Rgb565::new(17, 48, 26); // #88C0D0
+        let snow = Rgb565::new(28, 58, 30); // #E5E9F0
+        let dark_grey = Rgb565::new(8, 19, 11); // #434C5E
+        let danger = Rgb565::new(23, 24, 13); // #BF616A
         Self {
             normal: (text, bg),
             inverted: (snow, dark_grey),
@@ -600,12 +635,12 @@ impl ColorTheme<Rgb565> {
     /// | `Inverted` | `#F8F8F2` white| `#44475A` selection |
     /// | `Danger`   | `#FF5555` red (text) | `#282A36` dark |
     pub fn dracula() -> Self {
-        let text = Rgb565::new(31, 62, 30);       // #F8F8F2
-        let bg = Rgb565::new(5, 10, 6);           // #282A36
-        let muted = Rgb565::new(12, 28, 20);      // #6272A4
-        let accent = Rgb565::new(23, 36, 31);     // #BD93F9
-        let selection = Rgb565::new(8, 17, 11);   // #44475A
-        let danger = Rgb565::new(31, 21, 10);     // #FF5555
+        let text = Rgb565::new(31, 62, 30); // #F8F8F2
+        let bg = Rgb565::new(5, 10, 6); // #282A36
+        let muted = Rgb565::new(12, 28, 20); // #6272A4
+        let accent = Rgb565::new(23, 36, 31); // #BD93F9
+        let selection = Rgb565::new(8, 17, 11); // #44475A
+        let danger = Rgb565::new(31, 21, 10); // #FF5555
         Self {
             normal: (text, bg),
             inverted: (text, selection),
@@ -628,13 +663,13 @@ impl ColorTheme<Rgb565> {
     /// | `Inverted` | `#FBF1C7` light-sand | `#504945` bark |
     /// | `Danger`   | `#FB4934` orange-red | `#282828` pitch |
     pub fn gruvbox() -> Self {
-        let text = Rgb565::new(29, 54, 22);       // #EBDBB2
-        let bg = Rgb565::new(5, 10, 5);           // #282828
-        let muted = Rgb565::new(18, 32, 14);      // #928374
-        let accent = Rgb565::new(31, 47, 5);      // #FABD2F
+        let text = Rgb565::new(29, 54, 22); // #EBDBB2
+        let bg = Rgb565::new(5, 10, 5); // #282828
+        let muted = Rgb565::new(18, 32, 14); // #928374
+        let accent = Rgb565::new(31, 47, 5); // #FABD2F
         let light_sand = Rgb565::new(31, 60, 24); // #FBF1C7
-        let bark = Rgb565::new(10, 18, 8);        // #504945
-        let danger = Rgb565::new(31, 18, 6);       // #FB4934
+        let bark = Rgb565::new(10, 18, 8); // #504945
+        let danger = Rgb565::new(31, 18, 6); // #FB4934
         Self {
             normal: (text, bg),
             inverted: (light_sand, bark),
@@ -657,11 +692,11 @@ impl ColorTheme<Rgb565> {
     /// | `Inverted` | `#000000` black | `#FFFFFF` white |
     /// | `Danger`   | `#FF0033` neon red | `#000000` oled-black |
     pub fn matrix_oled() -> Self {
-        let text = Rgb565::new(31, 63, 31);       // #FFFFFF
-        let bg = Rgb565::new(0, 0, 0);            // #000000
-        let muted = Rgb565::new(16, 32, 16);      // #808080
-        let accent = Rgb565::new(0, 63, 6);       // #00FF33 (r>>3=0, g>>2=63, b>>3=6)
-        let danger = Rgb565::new(31, 0, 6);       // #FF0033
+        let text = Rgb565::new(31, 63, 31); // #FFFFFF
+        let bg = Rgb565::new(0, 0, 0); // #000000
+        let muted = Rgb565::new(16, 32, 16); // #808080
+        let accent = Rgb565::new(0, 63, 6); // #00FF33 (r>>3=0, g>>2=63, b>>3=6)
+        let danger = Rgb565::new(31, 0, 6); // #FF0033
         Self {
             normal: (text, bg),
             inverted: (bg, text), // Полная инверсия для фокуса
@@ -684,10 +719,10 @@ impl ColorTheme<Rgb565> {
     /// | `Inverted` | `#0A0E17` deep | `#00F0FF` cyan row |
     /// | `Danger`   | `#FF0055` crimson | `#0A0E17` deep-space |
     pub fn cyberpunk() -> Self {
-        let cyan = Rgb565::new(0, 60, 31);        // #00F0FF
-        let bg = Rgb565::new(1, 3, 2);            // #0A0E17
-        let muted = Rgb565::new(11, 26, 15);      // #5D6978
-        let crimson = Rgb565::new(31, 0, 10);     // #FF0055
+        let cyan = Rgb565::new(0, 60, 31); // #00F0FF
+        let bg = Rgb565::new(1, 3, 2); // #0A0E17
+        let muted = Rgb565::new(11, 26, 15); // #5D6978
+        let crimson = Rgb565::new(31, 0, 10); // #FF0055
         Self {
             normal: (cyan, bg),
             inverted: (bg, cyan),
@@ -710,13 +745,13 @@ impl ColorTheme<Rgb565> {
     /// | `Inverted` | `#FEFA6B` yellow | `#372963` intense purple |
     /// | `Danger`   | `#FE4450` hot red | `#262335` purple-ink |
     pub fn synthwave() -> Self {
-        let text = Rgb565::new(31, 63, 31);       // #FDFDFD
-        let bg = Rgb565::new(4, 8, 6);            // #262335
-        let muted = Rgb565::new(16, 34, 23);      // #848BB8
-        let accent = Rgb565::new(31, 31, 27);     // #FF7EDB
-        let yellow = Rgb565::new(31, 62, 13);     // #FEFA6B
+        let text = Rgb565::new(31, 63, 31); // #FDFDFD
+        let bg = Rgb565::new(4, 8, 6); // #262335
+        let muted = Rgb565::new(16, 34, 23); // #848BB8
+        let accent = Rgb565::new(31, 31, 27); // #FF7EDB
+        let yellow = Rgb565::new(31, 62, 13); // #FEFA6B
         let dark_purple = Rgb565::new(6, 10, 12); // #372963
-        let danger = Rgb565::new(31, 17, 10);     // #FE4450
+        let danger = Rgb565::new(31, 17, 10); // #FE4450
         Self {
             normal: (text, bg),
             inverted: (yellow, dark_purple),
@@ -739,13 +774,13 @@ impl ColorTheme<Rgb565> {
     /// | `Inverted` | `#73DACA` cyan | `#33467C` deep-blue |
     /// | `Danger`   | `#F7768E` pink-red | `#1A1B26` storm-bg |
     pub fn tokyo_night() -> Self {
-        let text = Rgb565::new(21, 44, 26);       // #A9B1D6
-        let bg = Rgb565::new(3, 6, 4);            // #1A1B26
-        let muted = Rgb565::new(10, 23, 17);      // #565F89
-        let accent = Rgb565::new(15, 40, 30);     // #7AA2F7
-        let cyan = Rgb565::new(14, 54, 25);       // #73DACA
-        let focus_bg = Rgb565::new(6, 17, 15);    // #33467C
-        let danger = Rgb565::new(30, 29, 17);     // #F7768E
+        let text = Rgb565::new(21, 44, 26); // #A9B1D6
+        let bg = Rgb565::new(3, 6, 4); // #1A1B26
+        let muted = Rgb565::new(10, 23, 17); // #565F89
+        let accent = Rgb565::new(15, 40, 30); // #7AA2F7
+        let cyan = Rgb565::new(14, 54, 25); // #73DACA
+        let focus_bg = Rgb565::new(6, 17, 15); // #33467C
+        let danger = Rgb565::new(30, 29, 17); // #F7768E
         Self {
             normal: (text, bg),
             inverted: (cyan, focus_bg),
@@ -768,12 +803,12 @@ impl ColorTheme<Rgb565> {
     /// | `Inverted` | `#D3C6AA` oatmeal | `#3A4246` charcoal |
     /// | `Danger`   | `#E67E80` terracotta | `#1E2326` pine-wood |
     pub fn everforest() -> Self {
-        let text = Rgb565::new(26, 49, 21);       // #D3C6AA
-        let bg = Rgb565::new(3, 8, 4);            // #1E2326
-        let muted = Rgb565::new(15, 33, 15);      // #7A8478
-        let accent = Rgb565::new(20, 48, 16);     // #A7C080
-        let focus_bg = Rgb565::new(7, 16, 8);     // #3A4246
-        let danger = Rgb565::new(28, 31, 16);     // #E67E80
+        let text = Rgb565::new(26, 49, 21); // #D3C6AA
+        let bg = Rgb565::new(3, 8, 4); // #1E2326
+        let muted = Rgb565::new(15, 33, 15); // #7A8478
+        let accent = Rgb565::new(20, 48, 16); // #A7C080
+        let focus_bg = Rgb565::new(7, 16, 8); // #3A4246
+        let danger = Rgb565::new(28, 31, 16); // #E67E80
         Self {
             normal: (text, bg),
             inverted: (text, focus_bg),
@@ -796,12 +831,12 @@ impl ColorTheme<Rgb565> {
     /// | `Inverted` | `#F8F8F2` white-gray | `#49483E` medium-stone |
     /// | `Danger`   | `#F92672` candy-pink | `#272822` dark-stone |
     pub fn monokai() -> Self {
-        let text = Rgb565::new(31, 62, 30);       // #F8F8F2
-        let bg = Rgb565::new(4, 10, 4);           // #272822
-        let muted = Rgb565::new(14, 28, 11);      // #75715E
-        let accent = Rgb565::new(28, 54, 14);     // #E6DB74
-        let focus_bg = Rgb565::new(9, 18, 7);     // #49483E
-        let danger = Rgb565::new(31, 9, 14);      // #F92672
+        let text = Rgb565::new(31, 62, 30); // #F8F8F2
+        let bg = Rgb565::new(4, 10, 4); // #272822
+        let muted = Rgb565::new(14, 28, 11); // #75715E
+        let accent = Rgb565::new(28, 54, 14); // #E6DB74
+        let focus_bg = Rgb565::new(9, 18, 7); // #49483E
+        let danger = Rgb565::new(31, 9, 14); // #F92672
         Self {
             normal: (text, bg),
             inverted: (text, focus_bg),
@@ -851,7 +886,11 @@ where
 {
     /// Creates a target using the default [`ColorTheme`] for `C`.
     pub fn new(display: &'a mut D, font: MonoFont<'static>) -> Self {
-        Self { display, font, theme: ColorTheme::default() }
+        Self {
+            display,
+            font,
+            theme: ColorTheme::default(),
+        }
     }
 }
 
@@ -878,7 +917,10 @@ where
 
     /// The pixel `Rectangle` for `area`, offset by the display origin.
     fn px_rect(&self, area: Area) -> Rectangle {
-        Rectangle::new(self.px_point(area.x, area.y), Size::new(area.w as u32, area.h as u32))
+        Rectangle::new(
+            self.px_point(area.x, area.y),
+            Size::new(area.w as u32, area.h as u32),
+        )
     }
 
     /// Access to the underlying `DrawTarget` for pixel-level drawing.
@@ -943,7 +985,9 @@ where
 
             BorderStyle::Single => {
                 let s = PrimitiveStyle::with_stroke(stroke_color, 1);
-                let _ = Rectangle::new(top_left, size).into_styled(s).draw(self.display);
+                let _ = Rectangle::new(top_left, size)
+                    .into_styled(s)
+                    .draw(self.display);
             }
 
             BorderStyle::Rounded => {
@@ -959,12 +1003,16 @@ where
 
             BorderStyle::Thick => {
                 let s = PrimitiveStyle::with_stroke(stroke_color, 2);
-                let _ = Rectangle::new(top_left, size).into_styled(s).draw(self.display);
+                let _ = Rectangle::new(top_left, size)
+                    .into_styled(s)
+                    .draw(self.display);
             }
 
             BorderStyle::Double => {
                 let s = PrimitiveStyle::with_stroke(stroke_color, 1);
-                let _ = Rectangle::new(top_left, size).into_styled(s).draw(self.display);
+                let _ = Rectangle::new(top_left, size)
+                    .into_styled(s)
+                    .draw(self.display);
                 if size.width > 5 && size.height > 5 {
                     let inner = Rectangle::new(
                         top_left + Point::new(2, 2),
@@ -1194,10 +1242,13 @@ mod tests {
 
     #[test]
     fn color_theme_override() {
-        let t = ColorTheme::<Rgb565>::new()
-            .with_colors(Style::Accent, Rgb565::WHITE, Rgb565::GREEN);
+        let t =
+            ColorTheme::<Rgb565>::new().with_colors(Style::Accent, Rgb565::WHITE, Rgb565::GREEN);
         assert_eq!(t.resolve(Style::Accent), (Rgb565::WHITE, Rgb565::GREEN));
-        assert_eq!(t.resolve(Style::Normal), (Rgb565::new(31, 62, 31), Rgb565::new(3, 6, 3)));
+        assert_eq!(
+            t.resolve(Style::Normal),
+            (Rgb565::new(31, 62, 31), Rgb565::new(3, 6, 3))
+        );
     }
 
     #[test]

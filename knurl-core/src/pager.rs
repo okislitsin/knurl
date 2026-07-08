@@ -64,7 +64,10 @@ struct LineBuf {
 
 impl LineBuf {
     fn new() -> Self {
-        Self { buf: [0; LINE_CAP], len: 0 }
+        Self {
+            buf: [0; LINE_CAP],
+            len: 0,
+        }
     }
     fn as_str(&self) -> &str {
         core::str::from_utf8(&self.buf[..self.len]).unwrap_or("")
@@ -99,7 +102,11 @@ impl Write for CharCounter {
 
 /// Returns the `[start, end)` char range of `s` as a `&str` (char-boundary safe).
 fn char_slice(s: &str, start: usize, end: usize) -> &str {
-    let b0 = s.char_indices().nth(start).map(|(i, _)| i).unwrap_or(s.len());
+    let b0 = s
+        .char_indices()
+        .nth(start)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
     let b1 = s.char_indices().nth(end).map(|(i, _)| i).unwrap_or(s.len());
     &s[b0..b1]
 }
@@ -324,8 +331,14 @@ mod tests {
     use crate::mock::{Op, RecordingTarget};
     use alloc::vec::Vec;
 
-    const LINES: &[&str] =
-        &["line one", "line two", "line three", "line four", "line five", "line six"];
+    const LINES: &[&str] = &[
+        "line one",
+        "line two",
+        "line three",
+        "line four",
+        "line five",
+        "line six",
+    ];
 
     // Default RecordingTarget metrics: char_width = 6, line_height = 10.
 
@@ -340,7 +353,10 @@ mod tests {
     }
 
     fn fills(t: &RecordingTarget) -> usize {
-        t.ops().iter().filter(|op| matches!(op, Op::Fill { .. })).count()
+        t.ops()
+            .iter()
+            .filter(|op| matches!(op, Op::Fill { .. }))
+            .count()
     }
 
     #[test]
@@ -427,7 +443,9 @@ mod tests {
 
     #[test]
     fn follow_pins_to_bottom_as_it_grows() {
-        let s = Stream { count: Cell::new(10) };
+        let s = Stream {
+            count: Cell::new(10),
+        };
         let mut p = Pager::new(&s).with_follow(true);
         let mut t = RecordingTarget::new(60, 30); // 3 rows, "log line" = 8 ≤ 10 cols
         p.view(&mut t, Area::new(0, 0, 60, 30)); // cache rows=3
@@ -443,7 +461,9 @@ mod tests {
 
     #[test]
     fn scrolling_up_disengages_follow() {
-        let s = Stream { count: Cell::new(10) };
+        let s = Stream {
+            count: Cell::new(10),
+        };
         let mut p = Pager::new(&s).with_follow(true);
         let mut t = RecordingTarget::new(60, 30);
         p.view(&mut t, Area::new(0, 0, 60, 30));

@@ -80,10 +80,8 @@ fn main() {
         }
 
         // Frame gate: skip entirely when nothing is dirty.
-        let dirty = title.dirty()
-            || spinner.dirty()
-            || list.dirty()
-            || (dialog_open && dialog.dirty());
+        let dirty =
+            title.dirty() || spinner.dirty() || list.dirty() || (dialog_open && dialog.dirty());
         if !dirty {
             return Frame::Skipped;
         }
@@ -95,7 +93,10 @@ fn main() {
         );
         title.view(target, Area::new(head.x + 2, head.y, head.w, head.h));
         spinner.view(target, Area::new(spin.x + 2, spin.y, spin.w, spin.h));
-        list.view(target, Area::new(body.x + 2, body.y, body.w.saturating_sub(4), body.h));
+        list.view(
+            target,
+            Area::new(body.x + 2, body.y, body.w.saturating_sub(4), body.h),
+        );
         if dialog_open {
             let dw = (w * 3) / 4;
             let dh = (lh * 4).min(h);
@@ -104,7 +105,10 @@ fn main() {
 
         paints += 1;
         if paints.is_multiple_of(20) {
-            println!("frames={frames} paints={paints} (skipped {})", frames - paints);
+            println!(
+                "frames={frames} paints={paints} (skipped {})",
+                frames - paints
+            );
         }
         Frame::Painted
     });

@@ -28,8 +28,8 @@ use std::cell::RefCell;
 use knurl_sim::core::{
     Align, Area, BarChart, BorderStyle, Button, Checkbox, Component,
     Constraint::{Fill, Length},
-    Counter, Dialog, Form, FormField, HStack, Help, Label, LineGauge, LinesModel, List, Msg, Padded,
-    Padding, Pager, Paginator, Picker, ProgressBar, Radio, RenderTarget, Router, Scrollbar,
+    Counter, Dialog, Form, FormField, HStack, Help, Label, LineGauge, LinesModel, List, Msg,
+    Padded, Padding, Pager, Paginator, Picker, ProgressBar, Radio, RenderTarget, Router, Scrollbar,
     Separator, Slider, Spinner, StatusBar, Style, Table, Tabs, TextInput, Title, Toggle, Tree,
     TreeItem, VStack,
 };
@@ -38,9 +38,25 @@ use knurl_sim::{ColorSimConfig, ColorSimulator, Frame};
 // ── Catalog data (all ASCII) ───────────────────────────────────────────────────
 
 const MENU: &[&str] = &[
-    "Text", "List", "Tree", "Table", "Bar chart", "Toggles", "Editors", "Radio", "Text input",
-    "Pager (live)", "Indicators", "Position", "Tabs", "Status bar", "Help", "Dialog", "Form",
-    "Layout", "Exit",
+    "Text",
+    "List",
+    "Tree",
+    "Table",
+    "Bar chart",
+    "Toggles",
+    "Editors",
+    "Radio",
+    "Text input",
+    "Pager (live)",
+    "Indicators",
+    "Position",
+    "Tabs",
+    "Status bar",
+    "Help",
+    "Dialog",
+    "Form",
+    "Layout",
+    "Exit",
 ];
 const LIST_ITEMS: &[&str] = &[
     "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet",
@@ -98,7 +114,10 @@ struct StreamLog {
 }
 impl StreamLog {
     fn new(cap: usize) -> Self {
-        Self { lines: RefCell::new(Vec::new()), cap }
+        Self {
+            lines: RefCell::new(Vec::new()),
+            cap,
+        }
     }
     fn push(&self, line: String) {
         let mut v = self.lines.borrow_mut();
@@ -138,7 +157,13 @@ enum Row {
 
 /// Draws a vertical row stack scrolled by `scroll`, with a `Scrollbar` on
 /// overflow. Clears its own `area` first (it is assembled from transient pieces).
-fn draw_stack(target: &mut dyn RenderTarget, area: Area, scroll: usize, rows: &[Row], spinner: &Spinner) {
+fn draw_stack(
+    target: &mut dyn RenderTarget,
+    area: Area,
+    scroll: usize,
+    rows: &[Row],
+    spinner: &Spinner,
+) {
     if area.w == 0 || area.h == 0 {
         return;
     }
@@ -317,8 +342,15 @@ impl Demo {
             back: Button::new("< Back"),
             chk: Checkbox::new("Logging"),
             tog: Toggle::new("Wi-Fi").with_on(true),
-            counter: Counter::new("Brightness").with_range(0, 100).with_step(10).with_value(60),
-            slider: Slider::new("Volume").with_range(0, 100).with_step(10).with_value(40).with_label_width(72),
+            counter: Counter::new("Brightness")
+                .with_range(0, 100)
+                .with_step(10)
+                .with_value(60),
+            slider: Slider::new("Volume")
+                .with_range(0, 100)
+                .with_step(10)
+                .with_value(40)
+                .with_label_width(72),
             picker: Picker::new("Mode", MODES),
             fan: Toggle::new("Fan"),
             level: Counter::new("Level").with_range(0, 5).with_value(2),
@@ -361,8 +393,12 @@ impl Demo {
             }
             Page::Editors => {
                 self.form = Form::new();
-                let mut f: [&mut dyn FormField; 4] =
-                    [&mut self.counter, &mut self.slider, &mut self.picker, &mut self.back];
+                let mut f: [&mut dyn FormField; 4] = [
+                    &mut self.counter,
+                    &mut self.slider,
+                    &mut self.picker,
+                    &mut self.back,
+                ];
                 self.form.sync_focus(&mut f);
             }
             Page::TextInputP => {
@@ -373,7 +409,8 @@ impl Demo {
             }
             Page::FormP => {
                 self.form = Form::new();
-                let mut f: [&mut dyn FormField; 3] = [&mut self.fan, &mut self.level, &mut self.back];
+                let mut f: [&mut dyn FormField; 3] =
+                    [&mut self.fan, &mut self.level, &mut self.back];
                 self.form.sync_focus(&mut f);
             }
             Page::TabsP => self.tabs.set_selected(0),
@@ -437,8 +474,12 @@ impl Demo {
             }
             Page::Editors => {
                 {
-                    let mut f: [&mut dyn FormField; 4] =
-                        [&mut self.counter, &mut self.slider, &mut self.picker, &mut self.back];
+                    let mut f: [&mut dyn FormField; 4] = [
+                        &mut self.counter,
+                        &mut self.slider,
+                        &mut self.picker,
+                        &mut self.back,
+                    ];
                     self.form.update(msg, &mut f);
                 }
                 self.pop_if_back();
@@ -461,15 +502,23 @@ impl Demo {
 
             Page::ListP => {
                 let before = self.list.selected();
-                if self.zone_nav(msg, before, |s| s.list.update(&Msg::Down), |s| s.list.selected())
-                {
+                if self.zone_nav(
+                    msg,
+                    before,
+                    |s| s.list.update(&Msg::Down),
+                    |s| s.list.selected(),
+                ) {
                     self.list.update(&Msg::Up);
                 }
             }
             Page::TreeP => {
                 let before = self.tree.selected();
-                if self.zone_nav(msg, before, |s| s.tree.update(&Msg::Down), |s| s.tree.selected())
-                {
+                if self.zone_nav(
+                    msg,
+                    before,
+                    |s| s.tree.update(&Msg::Down),
+                    |s| s.tree.selected(),
+                ) {
                     self.tree.update(&Msg::Up);
                 }
                 if !self.on_back && matches!(msg, Msg::Select) {
@@ -478,14 +527,24 @@ impl Demo {
             }
             Page::TableP => {
                 let before = self.table.selected();
-                self.zone_nav(msg, before, |s| s.table.update(&Msg::Down), |s| s.table.selected());
+                self.zone_nav(
+                    msg,
+                    before,
+                    |s| s.table.update(&Msg::Down),
+                    |s| s.table.selected(),
+                );
                 if matches!(msg, Msg::Up) && !self.on_back {
                     self.table.update(&Msg::Up);
                 }
             }
             Page::RadioP => {
                 let before = self.radio.cursor();
-                self.zone_nav(msg, before, |s| s.radio.update(&Msg::Down), |s| s.radio.cursor());
+                self.zone_nav(
+                    msg,
+                    before,
+                    |s| s.radio.update(&Msg::Down),
+                    |s| s.radio.cursor(),
+                );
                 if !self.on_back {
                     match msg {
                         Msg::Up => self.radio.update(&Msg::Up),
@@ -496,7 +555,12 @@ impl Demo {
             }
             Page::HelpP => {
                 let before = self.help.offset();
-                self.zone_nav(msg, before, |s| s.help.update(&Msg::Down), |s| s.help.offset());
+                self.zone_nav(
+                    msg,
+                    before,
+                    |s| s.help.update(&Msg::Down),
+                    |s| s.help.offset(),
+                );
                 if matches!(msg, Msg::Up) && !self.on_back {
                     self.help.update(&Msg::Up);
                 }
@@ -572,7 +636,12 @@ impl Demo {
 
             Page::DialogP => {
                 let before = self.dialog.selected();
-                self.zone_nav(msg, before, |s| s.dialog.update(&Msg::Down), |s| s.dialog.selected());
+                self.zone_nav(
+                    msg,
+                    before,
+                    |s| s.dialog.update(&Msg::Down),
+                    |s| s.dialog.selected(),
+                );
                 if !self.on_back {
                     match msg {
                         Msg::Up => self.dialog.update(&Msg::Up),
@@ -673,12 +742,16 @@ impl Demo {
             Area::new(0, 0, w, h),
             &[Length(lh + 2), Fill(1), Length(lh + 2)],
         );
-        self.title.view(target, Area::new(head.x, head.y + 1, head.w, lh));
+        self.title
+            .view(target, Area::new(head.x, head.y + 1, head.w, lh));
 
         // The status-bar hint is chrome: it only needs repainting on a transition
         // (otherwise it persists), which keeps idle/animation frames partial.
         if self.force {
-            StatusBar::new().with_left(hint_for(self.page())).with_right("knurl").view(target, foot);
+            StatusBar::new()
+                .with_left(hint_for(self.page()))
+                .with_right("knurl")
+                .view(target, foot);
         }
 
         let body = Area::new(4, mid.y, mid.w.saturating_sub(8), mid.h);
@@ -695,7 +768,8 @@ impl Demo {
                 self.form.view(target, body, &f);
             }
             Page::Editors => {
-                let f: [&dyn FormField; 4] = [&self.counter, &self.slider, &self.picker, &self.back];
+                let f: [&dyn FormField; 4] =
+                    [&self.counter, &self.slider, &self.picker, &self.back];
                 self.form.view(target, body, &f);
             }
             Page::TextInputP => {
@@ -727,14 +801,21 @@ impl Demo {
                     ("Net", s.chan[2]),
                     ("Disk", s.chan[3]),
                 ];
-                BarChart::new(&data).with_label_width(48).with_max(100).view(t, a);
+                BarChart::new(&data)
+                    .with_label_width(48)
+                    .with_max(100)
+                    .view(t, a);
             }),
 
             Page::TabsP => self.body_with_back(target, body, |s, t, a| s.view_tabs(t, a)),
             Page::StatusBarP => self.body_with_back(target, body, |_s, t, a| {
                 let lh = t.line_height();
                 let row = Area::new(a.x, a.y, a.w, lh);
-                StatusBar::new().with_left("Left").with_center("Center").with_right("Right").view(t, row);
+                StatusBar::new()
+                    .with_left("Left")
+                    .with_center("Center")
+                    .with_right("Right")
+                    .view(t, row);
                 Label::new("StatusBar: left / center / right")
                     .with_style(Style::Muted)
                     .view(t, Area::new(a.x, a.y + lh * 2, a.w, lh));
@@ -751,7 +832,13 @@ impl Demo {
             Page::Indicators => {
                 let [stack, back] = VStack::split(body, &[Fill(1), Length(lh)]);
                 self.vis.set((stack.h / lh) as usize);
-                draw_stack(target, stack, self.scroll, &self.rows_indicators(), &self.spinner);
+                draw_stack(
+                    target,
+                    stack,
+                    self.scroll,
+                    &self.rows_indicators(),
+                    &self.spinner,
+                );
                 self.draw_back(target, back);
             }
         }
@@ -770,30 +857,41 @@ impl Demo {
     }
 
     fn draw_back(&self, target: &mut dyn RenderTarget, area: Area) {
-        let style = if self.on_back { Style::Focus } else { Style::Muted };
+        let style = if self.on_back {
+            Style::Focus
+        } else {
+            Style::Muted
+        };
         Label::new("< Back").with_style(style).view(target, area);
     }
 
     fn view_tabs(&self, target: &mut dyn RenderTarget, area: Area) {
         let lh = target.line_height().max(1);
-        self.tabs.view(target, Area::new(area.x, area.y, area.w, lh));
+        self.tabs
+            .view(target, Area::new(area.x, area.y, area.w, lh));
         let tab = self.tabs.selected().min(2);
         for (i, item) in TAB_CONTENT[tab].iter().enumerate() {
             let y = area.y + lh * 2 + i as u16 * lh;
-            Label::new(item).with_style(Style::Normal).view(target, Area::new(area.x, y, area.w, lh));
+            Label::new(item)
+                .with_style(Style::Normal)
+                .view(target, Area::new(area.x, y, area.w, lh));
         }
     }
 
     fn view_layout(&self, target: &mut dyn RenderTarget, area: Area) {
         let lh = target.line_height().max(1);
         let [top, mid, bot] = VStack::split(area, &[Length(lh), Fill(1), Length(lh)]);
-        Label::new("VStack: top row").with_style(Style::Accent).view(target, top);
+        Label::new("VStack: top row")
+            .with_style(Style::Accent)
+            .view(target, top);
         let [l, r] = HStack::split(mid, &[Fill(1), Fill(1)]);
         target.draw_box(l, BorderStyle::Rounded);
         target.draw_box(r, BorderStyle::Rounded);
         Padded::new(Label::new("Left pane"), Padding::uniform(4)).view(target, l);
         Padded::new(Label::new("Right pane"), Padding::uniform(4)).view(target, r);
-        Label::new("HStack + Bordered + Padded").with_style(Style::Accent).view(target, bot);
+        Label::new("HStack + Bordered + Padded")
+            .with_style(Style::Accent)
+            .view(target, bot);
     }
 
     fn view_position(&self, target: &mut dyn RenderTarget, area: Area) {
@@ -809,14 +907,29 @@ impl Demo {
             let style = if r == 0 { Style::Focus } else { Style::Muted };
             Label::new(POS_ROWS[idx]).with_style(style).view(
                 target,
-                Area::new(rows_area.x, rows_area.y + r as u16 * lh, rows_area.w.saturating_sub(4), lh),
+                Area::new(
+                    rows_area.x,
+                    rows_area.y + r as u16 * lh,
+                    rows_area.w.saturating_sub(4),
+                    lh,
+                ),
             );
         }
         let mut sb = Scrollbar::new();
         sb.set(POS_ROWS.len(), visible, self.pos_offset);
-        sb.view(target, Area::new(rows_area.x + rows_area.w - 3, rows_area.y, 3, visible as u16 * lh));
+        sb.view(
+            target,
+            Area::new(
+                rows_area.x + rows_area.w - 3,
+                rows_area.y,
+                3,
+                visible as u16 * lh,
+            ),
+        );
         let pages = POS_ROWS.len() - visible + 1;
-        Paginator::new(pages).with_current(self.pos_offset).view(target, pag_row);
+        Paginator::new(pages)
+            .with_current(self.pos_offset)
+            .view(target, pag_row);
     }
 
     fn rows_text(&self) -> [Row; 9] {

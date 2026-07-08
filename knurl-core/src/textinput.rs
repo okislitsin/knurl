@@ -159,10 +159,19 @@ impl<'a, const N: usize> Component for TextInput<'a, N> {
 
         // Row 0: label + current text. While editing, a 1px underline under the
         // field + a caret make the active entry state obvious (also on mono).
-        let label_style = if self.focused { Style::Focus } else { Style::Normal };
+        let label_style = if self.focused {
+            Style::Focus
+        } else {
+            Style::Normal
+        };
         let lw = self.label_w.min(area.w);
         if lw > 0 {
-            target.draw_text(area.x, area.y, truncate(self.label, (lw / cw) as usize), label_style);
+            target.draw_text(
+                area.x,
+                area.y,
+                truncate(self.label, (lw / cw) as usize),
+                label_style,
+            );
         }
         let text_x = area.x + self.label_w;
         let avail = area.w.saturating_sub(self.label_w);
@@ -170,7 +179,10 @@ impl<'a, const N: usize> Component for TextInput<'a, N> {
             let text = truncate(self.text(), (avail / cw) as usize);
             target.draw_text(text_x, area.y, text, Style::Normal);
             if self.editing {
-                target.fill_rect(Area::new(text_x, area.y + line_h - 1, avail, 1), Style::Focus);
+                target.fill_rect(
+                    Area::new(text_x, area.y + line_h - 1, avail, 1),
+                    Style::Focus,
+                );
                 let caret_x = text_x + target.text_width(text);
                 if caret_x + cw <= area.x + area.w {
                     target.draw_text(caret_x, area.y, "_", Style::Focus);
@@ -193,7 +205,11 @@ impl<'a, const N: usize> Component for TextInput<'a, N> {
                     break;
                 }
                 let g = self.glyph_at(idx);
-                let style = if idx == self.candidate { Style::Focus } else { Style::Muted };
+                let style = if idx == self.candidate {
+                    Style::Focus
+                } else {
+                    Style::Muted
+                };
                 let mut b = [0u8; 4];
                 target.draw_text(cx, ry, g.encode_utf8(&mut b), style);
             }
@@ -218,7 +234,11 @@ impl<'a, const N: usize> FormField for TextInput<'a, N> {
     /// fields below down by one row - accepted, and it wastes no space when idle.
     fn height(&self, target: &dyn RenderTarget) -> u16 {
         let line_h = target.line_height();
-        if self.editing { line_h.saturating_mul(2) } else { line_h }
+        if self.editing {
+            line_h.saturating_mul(2)
+        } else {
+            line_h
+        }
     }
 
     fn editable(&self) -> bool {
@@ -304,7 +324,11 @@ mod tests {
         // Not editing → no ribbon, no underline.
         let mut t0 = RecordingTarget::new(120, 30);
         ti.view(&mut t0, area);
-        assert!(!t0.ops().iter().any(|op| matches!(op, Op::Text { y: 10, .. })));
+        assert!(
+            !t0.ops()
+                .iter()
+                .any(|op| matches!(op, Op::Text { y: 10, .. }))
+        );
 
         // Editing → ribbon on row 1 (y = line_height = 10), candidate Focus.
         ti.set_editing(true);
@@ -324,7 +348,11 @@ mod tests {
         assert!(tx.contains(&(12, 10, "B".into(), Style::Focus)));
         assert!(tx.contains(&(24, 10, "C".into(), Style::Muted)));
         // Edit underline cue present (a Fill on row 0's bottom).
-        assert!(t.ops().iter().any(|op| matches!(op, Op::Fill { area, style: Style::Focus } if area.h == 1)));
+        assert!(
+            t.ops()
+                .iter()
+                .any(|op| matches!(op, Op::Fill { area, style: Style::Focus } if area.h == 1))
+        );
     }
 
     #[test]

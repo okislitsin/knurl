@@ -23,7 +23,10 @@ pub struct Tabs<'a> {
 
 impl<'a> Tabs<'a> {
     pub fn new(titles: &'a [&'a str]) -> Self {
-        Self { titles, selected: 0 }
+        Self {
+            titles,
+            selected: 0,
+        }
     }
 
     /// Sets the selected tab, clamped into `[0, len - 1]` (no-op with no tabs).
@@ -95,7 +98,11 @@ impl<'a> Component for Tabs<'a> {
             target.draw_text(x, area.y, t, style);
 
             // Underline: 2px Accent for the active tab, 1px Muted otherwise.
-            let (uh, ustyle) = if active { (2, Style::Accent) } else { (1, Style::Muted) };
+            let (uh, ustyle) = if active {
+                (2, Style::Accent)
+            } else {
+                (1, Style::Muted)
+            };
             let uy = area.y + line_h.saturating_sub(uh);
             target.fill_rect(Area::new(x, uy, tw, uh), ustyle);
 
@@ -179,6 +186,10 @@ mod tests {
         let mut t = RecordingTarget::new(120, 12);
         tabs.view(&mut t, Area::new(0, 0, 120, 12));
         // Now "Two" carries the 2px Accent underline.
-        assert!(fills(&t).iter().any(|(a, st)| a.h == 2 && a.x == 26 && *st == Style::Accent));
+        assert!(
+            fills(&t)
+                .iter()
+                .any(|(a, st)| a.h == 2 && a.x == 26 && *st == Style::Accent)
+        );
     }
 }
