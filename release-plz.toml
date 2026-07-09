@@ -6,5 +6,7 @@
 [[package]]
 name = "knurl-sim"
 # Dev/demo crate with a system dependency (SDL2): publish = false in its
-# Cargo.toml, and excluded from the release cycle entirely here.
+# Cargo.toml (release-plz requires mirroring that here), and excluded from
+# the release cycle entirely.
+publish = false
 release = false
