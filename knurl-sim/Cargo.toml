@@ -12,8 +12,8 @@ categories = ["embedded", "development-tools", "simulation"]
 publish = false
 
 [dependencies]
-knurl-core = { path = "../knurl-core", version = "0.1.0" }
-knurl-graphics = { path = "../knurl-graphics", version = "0.1.0" }
+knurl-core = { path = "../knurl-core", version = "0.1.1" }
+knurl-graphics = { path = "../knurl-graphics", version = "0.1.1" }
 embedded-graphics = "0.8"
 # Pinned to the release that targets embedded-graphics 0.8 - the `DrawTarget`
 # types must unify with knurl-graphics, or `GraphicsTarget` won't accept the
