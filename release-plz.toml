@@ -1,0 +1,10 @@
+[workspace]
+# Defaults are fine: per-crate CHANGELOG.md, {package}-v{version} tags
+# (matches the existing knurl-core-v0.1.1 style), semver bumps derived
+# from conventional commits.
+
+[[package]]
+name = "knurl-sim"
+# Dev/demo crate with a system dependency (SDL2): publish = false in its
+# Cargo.toml, and excluded from the release cycle entirely here.
+release = false
