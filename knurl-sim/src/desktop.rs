@@ -636,18 +636,34 @@ mod tests {
     }
 
     /// Colour defaults: 320×240 ST7789 panel, encoder keymap, default palette.
+    ///
+    /// The palette assertions pin the default to Charm (`ColorTheme::new`):
+    /// `#FAFAFA` on `#1A1A1A`, with `#7D56F4` accent *text* on the same
+    /// background. Change these values when the default palette changes -
+    /// that is exactly the review this test is here to force.
     #[test]
     fn color_config_defaults() {
         let c = ColorSimConfig::default();
         assert_eq!((c.width, c.height), (320, 240));
         assert_eq!(c.keymap.map(Keycode::Space), Some(Msg::Select));
+
+        let normal = c.theme.resolve(Style::Normal);
+        let accent = c.theme.resolve(Style::Accent);
         assert_eq!(
-            c.theme.resolve(Style::Normal),
-            (Rgb565::WHITE, Rgb565::BLACK)
+            normal,
+            (Rgb565::new(31, 62, 31), Rgb565::new(3, 6, 3)),
+            "Normal should be Charm's #FAFAFA on #1A1A1A"
         );
         assert_eq!(
-            c.theme.resolve(Style::Accent),
-            (Rgb565::BLACK, Rgb565::BLUE)
+            accent,
+            (Rgb565::new(15, 21, 30), Rgb565::new(3, 6, 3)),
+            "Accent should be Charm's #7D56F4 text on the shared #1A1A1A"
         );
+
+        // Invariants any sane default palette must hold, spelled out so the
+        // numbers above are not the only thing under test.
+        assert_eq!(normal.1, accent.1, "accent is text, not a colour block");
+        assert_ne!(normal.0, accent.0, "accent must stand out from body text");
+        assert_ne!(normal.0, normal.1, "body text must be visible on its bg");
     }
 }
