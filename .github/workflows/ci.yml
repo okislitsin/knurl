@@ -18,16 +18,13 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
         run: cargo fmt --all --check
-
-      - name: Clippy
-        run: cargo clippy --all-features -- -D warnings
 
       # default-members exclude knurl-sim, so this never needs SDL2
       - name: Run tests
@@ -37,3 +34,58 @@ jobs:
       # verify it still compiles via the SDL2-free `web` feature
       - name: Check knurl-sim (no SDL2)
         run: cargo check -p knurl-sim --no-default-features --features web
+
+  # knurl-sim's desktop backend and every demo sit behind `feature = "desktop"`,
+  # which needs SDL2 - hence a separate job. The workspace lint lives here too,
+  # because `--workspace` pulls knurl-sim in and would fail to link without SDL2.
+  sim:
+    name: Simulator & lint (SDL2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install SDL2
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # The desktop tests never open a window; no video driver needed.
+      - name: Run knurl-sim tests
+        run: cargo test -p knurl-sim
+
+      # Explicit guard that the demos don't rot (also covered by the lint below).
+      - name: Check knurl-sim examples
+        run: cargo check -p knurl-sim --examples
+
+      # --workspace so knurl-sim is linted at all, --all-targets so examples
+      # and #[cfg(test)] code are linted too.
+      - name: Clippy (workspace)
+        run: cargo clippy --workspace --all-features --all-targets -- -D warnings
+
+  # README calls bare-metal portability a machine-checked promise - check it.
+  embedded:
+    name: Embedded (thumbv6m-none-eabi)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv6m-none-eabi
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build for thumbv6m-none-eabi
+        run: |
+          cargo build -p knurl-core --target thumbv6m-none-eabi
+          cargo build -p knurl-graphics --target thumbv6m-none-eabi
+          cargo build -p knurl --target thumbv6m-none-eabi
+          cargo build -p knurl --features graphics --target thumbv6m-none-eabi
