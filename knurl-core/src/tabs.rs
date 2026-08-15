@@ -157,14 +157,28 @@ impl<'a> Component for Tabs<'a> {
 /// other stop: entered from above it starts on the strip, entered from below it
 /// starts *inside* the page, so walking back up does not skip the whole thing.
 ///
-/// ## Repainting a switched-to page is the application's job
+/// ## Repainting a switched-to page
 ///
 /// The container only ever holds the **active** tab's page, so it cannot touch
-/// the one arriving on a switch - and a widget that has been off-screen is
-/// usually clean, which means it would draw nothing over the outgoing page's
-/// pixels. When [`Tabs::selected`] changes, clear the page area (or
-/// [`mark_dirty`](Component::mark_dirty) the incoming page) before drawing it,
-/// the same way a screen transition is handled elsewhere.
+/// the one arriving on a switch: at the moment the strip moves, the page it
+/// still has in hand is the one leaving. And a page that has been off-screen is
+/// usually clean, so it would draw nothing over the outgoing page's pixels -
+/// the screen would show tab 2's title above tab 1's content.
+///
+/// So the container reports the switch instead:
+/// [`take_switched`](TabPages::take_switched) is armed whenever the strip
+/// actually changed tab and cleared by the read, and the screen turns that into
+/// a repaint of itself - one line, in the same place it reads every other
+/// outcome:
+///
+/// ```ignore
+/// fn on_outcome(&mut self, _msg: &Msg, outcome: Outcome) -> Option<Self::Event> {
+///     if self.pages.take_switched() {
+///         self.invalidate(); // the page that arrived was off-screen and is clean
+///     }
+///     ...
+/// }
+/// ```
 ///
 /// ```
 /// use knurl_core::{Button, FocusChain, FocusZone, List, Msg, Outcome, TabPages, Tabs};
@@ -191,11 +205,26 @@ impl<'a> Component for Tabs<'a> {
 #[derive(Debug, Default)]
 pub struct TabPages {
     in_content: bool,
+    /// Armed when the strip moved to another tab, cleared by
+    /// [`take_switched`](TabPages::take_switched).
+    switched: bool,
 }
 
 impl TabPages {
     pub const fn new() -> Self {
-        Self { in_content: false }
+        Self {
+            in_content: false,
+            switched: false,
+        }
+    }
+
+    /// Whether the strip has changed tab since the last call, clearing the flag.
+    ///
+    /// The one thing the container cannot do for the screen: repaint the page
+    /// that just arrived (see the type docs). Read it once per event and
+    /// invalidate the screen when it says yes.
+    pub fn take_switched(&mut self) -> bool {
+        core::mem::take(&mut self.switched)
     }
 
     /// Whether the encoder is currently driving the page rather than the strip.
@@ -237,7 +266,12 @@ impl TabPages {
                     Outcome::Consumed
                 }
                 // Rotation belongs to the strip; its edges come back Ignored.
-                _ => tabs.update(msg),
+                _ => {
+                    let before = tabs.selected();
+                    let outcome = tabs.update(msg);
+                    self.switched |= tabs.selected() != before;
+                    outcome
+                }
             };
         }
 
@@ -553,6 +587,29 @@ mod tests {
             Outcome::Ignored,
             "already on the last tab"
         );
+    }
+
+    /// The switch is reported exactly once, and only when a tab actually
+    /// changed - a screen that repainted on every rotation at the last tab
+    /// would flicker for nothing.
+    #[test]
+    fn a_switch_is_reported_once_and_only_when_the_tab_moved() {
+        let mut tabs = Tabs::new(T);
+        let mut content = Content::default();
+        let mut pages = TabPages::new();
+
+        assert!(!pages.take_switched(), "nothing has moved yet");
+        let _ = pages.update(&Msg::Down, &mut tabs, &mut content);
+        assert!(pages.take_switched(), "tab 0 → 1");
+        assert!(!pages.take_switched(), "the read consumed it");
+
+        let _ = pages.update(&Msg::Down, &mut tabs, &mut content); // last tab
+        assert!(!pages.take_switched(), "the strip had nowhere to go");
+
+        // Inside the page, rotation belongs to the page, not the strip.
+        let _ = pages.update(&Msg::Select, &mut tabs, &mut content);
+        let _ = pages.update(&Msg::Down, &mut tabs, &mut content);
+        assert!(!pages.take_switched());
     }
 
     #[test]
