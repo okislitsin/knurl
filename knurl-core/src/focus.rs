@@ -138,8 +138,12 @@ impl<T: Component + ?Sized> FocusZone for T {
 /// exactly how `Form` moves between fields.
 ///
 /// At either end of the chain the event comes back out as `Ignored`. That is
-/// the signal to the application ("`Back` at the root means quit"), and the
-/// hook a chain of chains will hang off later.
+/// the signal to the application, and the hook a chain of chains will hang off
+/// later. What the application does with each of the three outcomes - and where
+/// [`Router`](crate::Router) comes in - is written out once, in the
+/// [router docs](crate::Router#where-the-router-meets-the-focus-chain): in
+/// short, leaving a screen on encoder hardware is an `Activated` from a "< Back"
+/// item, not an `Ignored` off the end.
 ///
 /// Zones that [refuse the focus](FocusZone::is_focusable) - captions, rules,
 /// anything static - are **stepped over** on the way past and never entered, so

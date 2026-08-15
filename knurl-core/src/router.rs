@@ -38,6 +38,79 @@
 //! [`at_root`](Router::at_root) reports the stack is already at the bottom, the
 //! app treats a Back as "exit". All operations saturate gracefully - popping the
 //! root and pushing past `DEPTH` are bounded no-ops, never panics.
+//!
+//! ## Where the router meets the focus chain
+//!
+//! The router knows nothing about focus zones and the
+//! [`FocusChain`](crate::FocusChain) knows nothing about screens - joining them
+//! is the application's `match` on the chain's [`Outcome`](crate::Outcome), and
+//! that match is the same on every screen:
+//!
+//! - [`Activated`](crate::Outcome::Activated) - the user picked something.
+//!   Ask the widgets *what*: a pressed "< Back" is a [`pop`](Router::pop), a
+//!   chosen menu item is a [`push`](Router::push). **This is how a screen is
+//!   left on encoder hardware**, where there is no Back button and "Back" is
+//!   therefore an ordinary focusable item at the end of the chain.
+//! - [`Consumed`](crate::Outcome::Consumed) - the screen spent it. Nothing for
+//!   the application to do.
+//! - [`Ignored`](crate::Outcome::Ignored) - nobody wanted it: the cursor has run
+//!   off both ends of the chain, or the event was never navigation in the first
+//!   place. Rotation landing here is simply the edge of the screen and normally
+//!   does nothing. A host that *does* have a Back key sends
+//!   [`Msg::Back`](crate::Msg::Back), which no widget handles - so it arrives
+//!   here, and this is the arm where it pops (or quits at the root).
+//!
+//! ```
+//! use knurl_core::{Button, FocusChain, FocusZone, List, Msg, Outcome, Router};
+//!
+//! #[derive(Debug, Clone, Copy, PartialEq)]
+//! enum Screen { Menu, Settings }
+//!
+//! let mut router = Router::<Screen, 4>::new(Screen::Menu);
+//! router.push(Screen::Settings);
+//!
+//! // The Settings screen: a list, and "Back" as its last stop.
+//! let mut list = List::new(&["Units", "Rate"]);
+//! let mut back = Button::new("< Back");
+//! let mut chain = FocusChain::new();
+//! {
+//!     let mut zones: [&mut dyn FocusZone; 2] = [&mut list, &mut back];
+//!     chain.sync_focus(&mut zones);
+//! }
+//!
+//! let mut quit = false;
+//! // Down past the end of the list onto "< Back", then press it.
+//! for msg in [Msg::Down, Msg::Down, Msg::Select] {
+//!     // The zone array is built per event and dropped again, so the widgets
+//!     // are free to be asked what happened once routing is over.
+//!     let outcome = {
+//!         let mut zones: [&mut dyn FocusZone; 2] = [&mut list, &mut back];
+//!         chain.update(&msg, &mut zones)
+//!     };
+//!     match outcome {
+//!         Outcome::Activated => {
+//!             if back.take_pressed() && !router.pop() {
+//!                 quit = true; // "Back" at the root means exit
+//!             }
+//!         }
+//!         Outcome::Consumed => {}
+//!         Outcome::Ignored => {
+//!             // Edge of the screen. A keyboard host's Back key lands here:
+//!             if matches!(msg, Msg::Back) && !router.pop() {
+//!                 quit = true;
+//!             }
+//!         }
+//!     }
+//! }
+//!
+//! assert_eq!(router.current(), Screen::Menu, "the Back item popped the screen");
+//! assert!(!quit);
+//! ```
+//!
+//! Deeper screens change nothing: a [`Form`](crate::Form) or a
+//! [`TabPages`](crate::TabPages) inside the chain passes an `Activated` from
+//! whatever is inside it straight out, so the application still reads one
+//! outcome per event, in one place.
 
 // ── Nav ─────────────────────────────────────────────────────────────────────
 
