@@ -23,9 +23,22 @@ fn corner_radius(size: Size) -> u32 {
     (m / 5).min(8).min(m / 2)
 }
 
-/// Top-left pixel and side length for a square check/radio indicator that fills
-/// the area height (with a 1px breathing gap top/bottom, like the bars) and is
-/// left-aligned in `rect`. Clamped to the rect width so it never overflows.
+/// Top-left pixel and side length for a square check/radio/expander indicator.
+///
+/// The rule, on both axes:
+/// - **side** = the cell height less a 1px breathing gap top and bottom (like
+///   the bars), then clamped to the cell **width** so it can never overflow a
+///   narrow cell;
+/// - **vertically centred** in the cell - always, including when the width is
+///   what clamped the side, which is what keeps the indicator level with the
+///   label beside it and centred on a focus band;
+/// - **flush with the cell's left edge**, deliberately not centred there: the
+///   label starts at a fixed column (four characters in, see `indicator_slot`),
+///   so a horizontally centred square would drift with the row height and stop
+///   lining up with the indicators above and below it.
+///
+/// An odd remainder falls to the bottom (integer division), so the square can
+/// sit one pixel high in a cell of odd spare height.
 fn indicator_square(rect: Rectangle) -> (Point, u32) {
     let h = rect.size.height;
     if h == 0 || rect.size.width == 0 {
@@ -1637,6 +1650,57 @@ mod tests {
             disp.affected_area(),
             Rectangle::new(Point::new(2, 2), Size::new(10, 8)),
             "the stroke escapes the area"
+        );
+    }
+
+    /// The indicator square's placement rule, stated as a test: centred
+    /// vertically in its cell, flush with the cell's left edge, and never wider
+    /// than the cell. Left-aligned rather than centred because the label beside
+    /// it starts at a fixed column - a centred square would drift with the row
+    /// height and stop lining up with the labels above and below it.
+    #[test]
+    fn indicator_square_is_centred_vertically_and_flush_left() {
+        for (w, h) in [(18u32, 10u32), (18, 20), (4, 10), (1, 1), (18, 2), (18, 3)] {
+            let cell = Rectangle::new(Point::new(3, 7), Size::new(w, h));
+            let (top, s) = indicator_square(cell);
+            assert!(s <= w && s <= h, "{w}x{h}: square {s} escapes the cell");
+            assert_eq!(top.x, cell.top_left.x, "{w}x{h}: not flush left");
+            // Equal slack above and below (odd remainders fall to the bottom).
+            let above = top.y - cell.top_left.y;
+            let below = (cell.top_left.y + h as i32) - (top.y + s as i32);
+            assert!(
+                above <= below && below - above <= 1,
+                "{w}x{h}: {above} above vs {below} below - not centred"
+            );
+        }
+    }
+
+    /// …and it stays centred once a focus band is under it: the band fills the
+    /// same cell, so the lit margin above and below the square must match.
+    #[test]
+    fn mono_indicator_sits_centred_on_a_focus_band() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        let area = Area::new(0, 0, 18, 10);
+        let mut disp = MockDisplay::<BinaryColor>::new();
+        disp.set_allow_overdraw(true);
+        {
+            let mut tgt = GraphicsTarget::new(&mut disp, FONT_6X10);
+            tgt.fill_band(area, Style::Focus);
+            tgt.draw_check(area, false, Style::Focus);
+        }
+        // On the band the square is drawn `Off`; the rows it does not touch stay
+        // fully lit. Count the untouched rows above and below it.
+        let row_all_on = |y: i32| {
+            (0..area.w as i32).all(|x| disp.get_pixel(Point::new(x, y)) == Some(BinaryColor::On))
+        };
+        let above = (0..10).take_while(|&y| row_all_on(y)).count();
+        let below = (0..10).rev().take_while(|&y| row_all_on(y)).count();
+        assert!(above > 0 && below > 0, "the square fills the whole cell");
+        assert!(
+            above.abs_diff(below) <= 1,
+            "{above} lit rows above vs {below} below - the square is off-centre"
         );
     }
 }

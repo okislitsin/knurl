@@ -73,6 +73,20 @@ fn draw_labeled_value(
     }
 }
 
+/// Clamps `v` into `[min, max]`. A hand-rolled `Ord::clamp`, because that one is
+/// neither `const` (so builders could not use it) nor total: it panics when a
+/// caller passes `min > max`, and a widget has no business panicking over a
+/// range someone typed backwards. Here the floor simply wins.
+const fn clamp_i32(v: i32, min: i32, max: i32) -> i32 {
+    if v < min {
+        min
+    } else if v > max {
+        max
+    } else {
+        v
+    }
+}
+
 /// The indicator box (a 3-character-wide square slot) at the area's left, and the
 /// pixel x where label text begins (4 characters in: 3 for the box, 1 gap) - the
 /// pixel analogue of the old `[x] Label` cell layout.
@@ -311,8 +325,11 @@ impl<'a> Button<'a> {
 impl<'a> Component for Button<'a> {
     fn update(&mut self, msg: &Msg) {
         if let Msg::Select = msg {
+            // No dirty: `pressed` is a latch the app polls, not something the
+            // button draws, so a press changes no pixel. (It is also cleared by
+            // `take_pressed` before the next frame, so there would be nothing
+            // left to render by the time a repaint ran.)
             self.pressed = true;
-            self.dirty.set(true);
         }
     }
 
@@ -378,17 +395,25 @@ impl<'a> Counter<'a> {
         }
     }
 
-    /// Sets the value verbatim - **not** clamped, since `min`/`max` may be set
-    /// later by [`with_range`](Counter::with_range). Clamping is enforced by
-    /// [`update`](Counter::update) and [`set_value`](Counter::set_value).
+    /// Sets the value, clamped into the range set **so far** (the default
+    /// `0..=100` unless [`with_range`](Counter::with_range) came first).
+    ///
+    /// Every entry point clamps - this one, [`set_value`](Counter::set_value)
+    /// and [`update`](Counter::update) - so the value is always inside the range
+    /// and `Up`/`Down` are symmetric. It used to be exempt "because the range
+    /// may be set later", which let a value sit below `min`, where `Up` could
+    /// only walk up from it one step at a time. `with_range` re-clamps for that
+    /// case, so either builder order lands in range.
     pub const fn with_value(mut self, v: i32) -> Self {
-        self.value = v;
+        self.value = clamp_i32(v, self.min, self.max);
         self
     }
 
+    /// Sets the bounds, pulling the current value into them.
     pub const fn with_range(mut self, min: i32, max: i32) -> Self {
         self.min = min;
         self.max = max;
+        self.value = clamp_i32(self.value, min, max);
         self
     }
 
@@ -403,7 +428,7 @@ impl<'a> Counter<'a> {
 
     /// Sets the value, clamped into `[min, max]`.
     pub fn set_value(&mut self, v: i32) {
-        let clamped = v.clamp(self.min, self.max);
+        let clamped = clamp_i32(v, self.min, self.max);
         if clamped != self.value {
             self.value = clamped;
             self.dirty.set(true);
@@ -414,12 +439,14 @@ impl<'a> Counter<'a> {
 impl<'a> Component for Counter<'a> {
     fn update(&mut self, msg: &Msg) {
         let before = self.value;
+        // Both directions clamp against *both* bounds, so a step never leaves
+        // the range from either end.
         match msg {
             Msg::Up | Msg::Right => {
-                self.value = self.value.saturating_add(self.step).min(self.max);
+                self.value = clamp_i32(self.value.saturating_add(self.step), self.min, self.max);
             }
             Msg::Down | Msg::Left => {
-                self.value = self.value.saturating_sub(self.step).max(self.min);
+                self.value = clamp_i32(self.value.saturating_sub(self.step), self.min, self.max);
             }
             _ => {}
         }
@@ -506,9 +533,11 @@ impl<'a> Slider<'a> {
         }
     }
 
+    /// Sets the bounds, pulling the current value into them.
     pub const fn with_range(mut self, min: i32, max: i32) -> Self {
         self.min = min;
         self.max = max;
+        self.value = clamp_i32(self.value, min, max);
         self
     }
 
@@ -517,11 +546,12 @@ impl<'a> Slider<'a> {
         self
     }
 
-    /// Sets the value verbatim - **not** clamped, since `min`/`max` may be set
-    /// later by [`with_range`](Slider::with_range). Clamping is enforced by
-    /// [`update`](Slider::update) and [`set_value`](Slider::set_value).
+    /// Sets the value, clamped into the range set **so far** (the default
+    /// `0..=100` unless [`with_range`](Slider::with_range) came first). Mirrors
+    /// [`Counter::with_value`] - every entry point clamps, so `Up`/`Down` are
+    /// symmetric and either builder order lands in range.
     pub const fn with_value(mut self, v: i32) -> Self {
-        self.value = v;
+        self.value = clamp_i32(v, self.min, self.max);
         self
     }
 
@@ -537,7 +567,7 @@ impl<'a> Slider<'a> {
 
     /// Sets the value, clamped into `[min, max]`.
     pub fn set_value(&mut self, v: i32) {
-        let clamped = v.clamp(self.min, self.max);
+        let clamped = clamp_i32(v, self.min, self.max);
         if clamped != self.value {
             self.value = clamped;
             self.dirty.set(true);
@@ -554,12 +584,13 @@ impl<'a> Slider<'a> {
 impl<'a> Component for Slider<'a> {
     fn update(&mut self, msg: &Msg) {
         let before = self.value;
+        // Symmetric with Counter: both directions clamp against both bounds.
         match msg {
             Msg::Up | Msg::Right => {
-                self.value = self.value.saturating_add(self.step).min(self.max);
+                self.value = clamp_i32(self.value.saturating_add(self.step), self.min, self.max);
             }
             Msg::Down | Msg::Left => {
-                self.value = self.value.saturating_sub(self.step).max(self.min);
+                self.value = clamp_i32(self.value.saturating_sub(self.step), self.min, self.max);
             }
             _ => {}
         }
@@ -1099,14 +1130,61 @@ mod tests {
         );
     }
 
+    /// A press draws nothing - `pressed` is a latch the app polls, not a state
+    /// the button renders - so it must not dirty the gate either.
     #[test]
-    fn button_dirty_contract() {
+    fn button_press_does_not_dirty() {
         let mut b = Button::new("Go");
         b.mark_clean();
         b.update(&Msg::Up); // not Select → no change
         assert!(!b.dirty());
         b.update(&Msg::Select);
+        assert!(b.take_pressed(), "the press is still latched");
+        assert!(!b.dirty(), "a press changes no pixel");
+
+        // Focus does change the picture (the band), so that still dirties.
+        b.focus();
         assert!(b.dirty());
+    }
+
+    // ── Clamping ──────────────────────────────────────────────────────────────
+
+    /// Values are clamped into the range wherever they enter, so `Up` and `Down`
+    /// are symmetric. Before, `with_value` let a value sit below `min` and only
+    /// `Down` could reach the bounds - `Up` walked up from wherever it was.
+    #[test]
+    fn counter_clamps_at_every_entry_point() {
+        // Below the floor at construction → pulled up to `min`.
+        let c = Counter::new("X").with_range(10, 20).with_value(0);
+        assert_eq!(c.value(), 10);
+        // …and one step up lands inside the range, not at 1.
+        let mut c = c;
+        c.update(&Msg::Up);
+        assert_eq!(c.value(), 11);
+
+        // Above the ceiling, either builder order.
+        assert_eq!(Counter::new("X").with_range(0, 5).with_value(9).value(), 5);
+        assert_eq!(Counter::new("X").with_value(9).with_range(0, 5).value(), 5);
+
+        // set_value agrees.
+        let mut c = Counter::new("X").with_range(0, 5);
+        c.set_value(-3);
+        assert_eq!(c.value(), 0);
+        c.set_value(99);
+        assert_eq!(c.value(), 5);
+    }
+
+    #[test]
+    fn slider_clamps_at_every_entry_point() {
+        let s = Slider::new("X").with_range(10, 20).with_value(0);
+        assert_eq!(s.value(), 10);
+        let mut s = s;
+        s.update(&Msg::Down);
+        assert_eq!(s.value(), 10, "already at the floor");
+        s.update(&Msg::Up);
+        assert_eq!(s.value(), 20, "step 10 from the floor");
+
+        assert_eq!(Slider::new("X").with_value(99).with_range(0, 5).value(), 5);
     }
 
     // ── Counter ───────────────────────────────────────────────────────────────
