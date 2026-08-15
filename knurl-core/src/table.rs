@@ -1,7 +1,8 @@
 use core::cell::Cell;
 
 use crate::{
-    Area, Component, Msg, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band, draw_v_scroll,
+    Area, Component, Marker, Msg, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band,
+    draw_v_scroll,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -63,7 +64,11 @@ impl<const R: usize, const C: usize> TableModel for [[&str; C]; R] {
 /// separators** and a **1px header underline** (via `fill_rect`) - no `|`/`-`
 /// characters. The header is `Accent` and the rows `Muted`; the selected row
 /// follows the focus language (see [`draw_cursor_band`]) - a full-width band
-/// while the table holds focus, plain `Normal` when it does not. Scrolls (never
+/// while the table holds focus, plain `Normal` when it does not. A [`Marker`]
+/// column on the left carries the cursor when the table does *not* have focus -
+/// styles alone cannot say it, since a monochrome theme draws `Normal` and
+/// `Muted` in the same ink. The column is reserved either way, so the layout
+/// does not shift as focus moves; [`Marker::NONE`] gives it up. Scrolls (never
 /// truncates) with the built-in scroll indicator.
 pub struct Table<'a, M: TableModel + ?Sized> {
     model: &'a M,
@@ -72,6 +77,7 @@ pub struct Table<'a, M: TableModel + ?Sized> {
     selected: usize,
     offset: usize,
     focused: bool,
+    marker: Marker,
     page_size: Cell<usize>,
     // Repaint gate: set when the selection, the scroll offset or focus changes,
     // cleared after a paint. Starts dirty so the first frame always draws.
@@ -89,6 +95,7 @@ impl<'a, M: TableModel + ?Sized> Table<'a, M> {
             selected: 0,
             offset: 0,
             focused: false,
+            marker: Marker::ARROW,
             page_size: Cell::new(usize::MAX),
             dirty: Cell::new(true),
         }
@@ -96,6 +103,13 @@ impl<'a, M: TableModel + ?Sized> Table<'a, M> {
 
     pub fn with_headers(mut self, headers: &'a [&'a str]) -> Self {
         self.headers = Some(headers);
+        self
+    }
+
+    /// Sets the cursor marker drawn in the column left of the cells
+    /// ([`Marker::NONE`] to drop the column entirely).
+    pub fn with_marker(mut self, marker: Marker) -> Self {
+        self.marker = marker;
         self
     }
 
@@ -115,20 +129,29 @@ impl<'a, M: TableModel + ?Sized> Table<'a, M> {
         self.widths.get(c).copied().unwrap_or(0)
     }
 
-    /// Left pixel x of column `c` within `area` (cumulative widths + gutters).
-    fn col_left(&self, area: Area, c: usize) -> u16 {
-        let mut x = area.x;
+    /// Left pixel x of column `c`, counting from the first cell column `x0`
+    /// (cumulative widths + gutters). `x0` already excludes the marker column.
+    fn col_left(&self, x0: u16, c: usize) -> u16 {
+        let mut x = x0;
         for i in 0..c {
             x = x.saturating_add(self.col_width(i)).saturating_add(COL_GAP);
         }
         x
     }
 
+    /// Characters that fit in column `c` at pixel `x`: its own width, capped at
+    /// whatever is left before `right` - a column wider than the space left must
+    /// not run under the scroll indicator.
+    fn cell_chars(&self, x: u16, c: usize, cw: u16, right: u16) -> usize {
+        (self.col_width(c).min(right.saturating_sub(x)) / cw) as usize
+    }
+
     /// Draws one row of cells across the columns at pixel-row `y`.
     fn draw_cells(
         &self,
         target: &mut dyn RenderTarget,
-        area: Area,
+        x0: u16,
+        right: u16,
         y: u16,
         r: usize,
         style: Style,
@@ -136,8 +159,8 @@ impl<'a, M: TableModel + ?Sized> Table<'a, M> {
         let cw = target.char_width().max(1);
         let cols = self.model.col_count();
         for c in 0..cols {
-            let x = self.col_left(area, c);
-            let max = (self.col_width(c) / cw) as usize;
+            let x = self.col_left(x0, c);
+            let max = self.cell_chars(x, c, cw, right);
             if max > 0 {
                 target.draw_text(x, y, truncate(self.model.cell(r, c), max), style);
             }
@@ -191,9 +214,16 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
         let reserve = if overflow { V_SCROLL_RESERVE } else { 0 };
         let content_right = area.x + area.w.saturating_sub(reserve);
 
+        // The cursor-marker column, reserved whether or not the table has focus:
+        // handing it back on blur would shift every cell (and the band's width)
+        // as focus moves, which costs more than the two character cells.
+        let cw = target.char_width().max(1);
+        let prefix_px = self.marker.width() as u16 * cw;
+        let x0 = area.x.saturating_add(prefix_px);
+
         // Vertical column separators (1px) spanning the whole table height.
         for c in 0..cols.saturating_sub(1) {
-            let sep_x = self.col_left(area, c).saturating_add(self.col_width(c)) + COL_GAP / 2;
+            let sep_x = self.col_left(x0, c).saturating_add(self.col_width(c)) + COL_GAP / 2;
             if sep_x < content_right {
                 target.fill_rect(Area::new(sep_x, area.y, 1, area.h), Style::Muted);
             }
@@ -201,10 +231,9 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
 
         // Header row + underline.
         if let Some(headers) = self.headers {
-            let cw = target.char_width().max(1);
             for c in 0..cols {
-                let x = self.col_left(area, c);
-                let max = (self.col_width(c) / cw) as usize;
+                let x = self.col_left(x0, c);
+                let max = self.cell_chars(x, c, cw, content_right);
                 if max > 0 {
                     let h = headers.get(c).copied().unwrap_or("");
                     target.draw_text(x, area.y, truncate(h, max), Style::Accent);
@@ -236,7 +265,15 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
             } else {
                 Style::Muted
             };
-            self.draw_cells(target, area, y, idx, style);
+            let prefix = if idx == self.selected {
+                self.marker.selected
+            } else {
+                self.marker.unselected
+            };
+            if !prefix.is_empty() {
+                target.draw_text(area.x, y, prefix, style);
+            }
+            self.draw_cells(target, x0, content_right, y, idx, style);
         }
 
         if overflow {
@@ -312,14 +349,15 @@ mod tests {
         let mut t = RecordingTarget::new(80, 50); // header + 4 data rows
         table.view(&mut t, Area::new(0, 0, 80, 50));
         let tx = texts(&t);
-        // Header cells in Accent: "Name" at x=0, "Val" at x=36.
-        assert!(tx.contains(&(0, 0, "Name".into(), Style::Accent)));
-        assert!(tx.contains(&(42, 0, "Val".into(), Style::Accent)));
-        // 1px vertical separator between the two columns at x = 33.
+        // Header cells in Accent, one marker column (2 chars = 12px) in:
+        // "Name" at x = 12, "Val" at x = 12 + 42.
+        assert!(tx.contains(&(12, 0, "Name".into(), Style::Accent)));
+        assert!(tx.contains(&(54, 0, "Val".into(), Style::Accent)));
+        // 1px vertical separator between the two columns, likewise at 39 + 12.
         assert!(
             fills(&t)
                 .iter()
-                .any(|(a, st)| a.w == 1 && a.x == 39 && *st == Style::Muted)
+                .any(|(a, st)| a.w == 1 && a.x == 51 && *st == Style::Muted)
         );
         // 1px header underline along the bottom of the header row (y = 9).
         assert!(
@@ -337,11 +375,12 @@ mod tests {
         table.focus();
         let mut t = RecordingTarget::new(80, 50);
         table.view(&mut t, Area::new(0, 0, 80, 50));
-        // Row 0 selected by default → "Alpha" at y = 10 (after header) in Focus.
+        // Row 0 selected by default → "Alpha" at y = 10 (after header) in Focus,
+        // its cell column starting after the marker at x = 12.
         assert!(
             texts(&t)
                 .iter()
-                .any(|(x, y, s, st)| *x == 0 && *y == 10 && s == "Alpha" && *st == Style::Focus)
+                .any(|(x, y, s, st)| *x == 12 && *y == 10 && s == "Alpha" && *st == Style::Focus)
         );
         // Row 1 not selected → dimmed.
         assert!(
@@ -359,7 +398,7 @@ mod tests {
         assert!(
             texts(&t)
                 .iter()
-                .any(|(x, y, s, _)| *x == 0 && *y == 0 && s == "Alpha")
+                .any(|(x, y, s, _)| *x == 12 && *y == 0 && s == "Alpha")
         );
     }
 
@@ -454,6 +493,81 @@ mod tests {
         );
     }
 
+    // ── Cursor marker ─────────────────────────────────────────────────────────
+
+    /// An unfocused table shows where the cursor sits with a marker column, the
+    /// way `List` does. Contrast alone cannot say it: a monochrome theme draws
+    /// `Normal` and `Muted` in the same ink.
+    #[test]
+    fn unfocused_table_shows_the_cursor_marker() {
+        let mut table = Table::new(ROWS, WIDTHS);
+        table.update(&Msg::Down); // cursor on "Beta"
+        let mut t = RecordingTarget::new(80, 50);
+        table.view(&mut t, Area::new(0, 0, 80, 50));
+
+        let tx = texts(&t);
+        assert!(bands(&t).is_empty(), "an unfocused table must not invert");
+        // No headers here, so the data rows sit at y = 0/10/20: the marker is on
+        // the cursor row, its same-width twin on the others.
+        assert!(tx.contains(&(0, 0, "  ".into(), Style::Muted)));
+        assert!(tx.contains(&(0, 10, "> ".into(), Style::Normal)));
+        assert!(tx.contains(&(0, 20, "  ".into(), Style::Muted)));
+    }
+
+    /// Focused, the marker is part of the band like every other glyph on the row.
+    #[test]
+    fn focused_table_marker_joins_the_band() {
+        let mut table = Table::new(ROWS, WIDTHS);
+        table.focus();
+        let mut t = RecordingTarget::new(80, 50);
+        table.view(&mut t, Area::new(0, 0, 80, 50));
+        assert!(texts(&t).contains(&(0, 0, "> ".into(), Style::Focus)));
+    }
+
+    /// The column is reserved whether or not the table has focus, so the layout
+    /// (and the band's width) does not shift as focus moves.
+    #[test]
+    fn table_marker_column_is_reserved_regardless_of_focus() {
+        let cells = |focused: bool| {
+            let mut table = Table::new(ROWS, WIDTHS);
+            if focused {
+                table.focus();
+            }
+            let mut t = RecordingTarget::new(80, 50);
+            table.view(&mut t, Area::new(0, 0, 80, 50));
+            texts(&t)
+                .into_iter()
+                .filter(|(_, _, s, _)| s == "Alpha")
+                .map(|(x, ..)| x)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(cells(false), cells(true));
+        assert_eq!(cells(false), [12], "cells start one marker in");
+    }
+
+    /// `Marker::NONE` gives the column up entirely, exactly as in `List`.
+    #[test]
+    fn table_marker_none_starts_cells_at_the_origin() {
+        let table = Table::new(ROWS, WIDTHS).with_marker(Marker::NONE);
+        let mut t = RecordingTarget::new(80, 50);
+        table.view(&mut t, Area::new(0, 0, 80, 50));
+        let tx = texts(&t);
+        assert!(tx.iter().any(|(x, _, s, _)| *x == 0 && s == "Alpha"));
+        assert!(!tx.iter().any(|(_, _, s, _)| s == "> " || s == "  "));
+    }
+
+    /// Neither the marker nor the cells may run under the scroll indicator.
+    #[test]
+    fn table_marker_and_cells_clear_the_scroll_column() {
+        let table = Table::new(ROWS, WIDTHS);
+        let mut t = RecordingTarget::new(80, 20); // 2 rows for 3 → overflow
+        table.view(&mut t, Area::new(0, 0, 80, 20));
+        for (x, _, s, _) in texts(&t) {
+            let end = x + 6 * s.chars().count() as u16;
+            assert!(end <= 80 - V_SCROLL_RESERVE, "{s:?} ends at {end}");
+        }
+    }
+
     /// A custom model: cells computed outside the widget.
     struct Grid;
     impl TableModel for Grid {
@@ -475,7 +589,7 @@ mod tests {
         let mut t = RecordingTarget::new(80, 50);
         table.view(&mut t, Area::new(0, 0, 80, 50));
         assert!(texts(&t).iter().any(|(_, _, s, _)| s == "r0c0"));
-        assert!(texts(&t).iter().any(|(x, _, s, _)| *x == 42 && s == "r1c1"));
+        assert!(texts(&t).iter().any(|(x, _, s, _)| *x == 54 && s == "r1c1"));
     }
 
     // ── Dirty gate ────────────────────────────────────────────────────────────
