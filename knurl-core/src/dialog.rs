@@ -264,6 +264,7 @@ mod tests {
                         Op::Box { area: a, .. }
                         | Op::Clear { area: a }
                         | Op::Fill { area: a, .. }
+                        | Op::Band { area: a, .. }
                         | Op::Bar { area: a, .. } => a.y,
                     };
                     assert!(y < area.y + area.h, "op {op:?} starts below {area:?}");

@@ -440,6 +440,19 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
         let _ = rect.into_styled(style).draw(self.display);
     }
 
+    /// Wash `area` in the `style`'s **background**: `On` when the [`Theme`]
+    /// inverts the style, `Off` when it does not
+    /// ([`mono_pair`](GraphicsTarget::mono_pair)) - the same pair every
+    /// indicator resolves, so `draw_text(.., Style::Focus)` over the band lands
+    /// `Off` glyphs on `On` and the row reads as one solid block.
+    ///
+    /// Unlike [`fill_rect`](RenderTarget::fill_rect) the style is honoured here:
+    /// a band is *meant* to disappear for a style the theme leaves plain.
+    fn fill_band(&mut self, area: Area, style: Style) {
+        let (_, bg) = self.mono_pair(style);
+        self.fill_bg(area, bg);
+    }
+
     /// A smooth pixel bar: a rounded outline track with a solid rounded fill of
     /// width `fill_permille/1000`. `style` is **deliberately** ignored - track
     /// and fill are both `On` and read apart by outline vs solid. A `Slider`
@@ -1093,6 +1106,15 @@ where
         let _ = rect.into_styled(s).draw(self.display);
     }
 
+    /// Wash `area` in the `style`'s **background** colour - the row background
+    /// the theme pairs with that style's text (e.g. the selection's dark grey
+    /// under `Focus`'s lilac), so the band and the text drawn over it agree.
+    fn fill_band(&mut self, area: Area, style: Style) {
+        let rect = self.px_rect(area);
+        let s = PrimitiveStyle::with_fill(self.theme.background(style));
+        let _ = rect.into_styled(s).draw(self.display);
+    }
+
     /// A smooth Charm-style bar: a dark-grey rounded track with a rounded fill in
     /// the `style`'s colour (e.g. purple for `Accent`, lilac for `Focus`), filled
     /// to `fill_permille/1000`.
@@ -1416,6 +1438,50 @@ mod tests {
                 "{ind:?}: Focus is not the inverse of Normal"
             );
         }
+    }
+
+    /// The band is the inverse of a plain row: `Focus` (inverted by the default
+    /// theme) fills it solid `On`, `Normal` leaves it `Off`, and text drawn over
+    /// a `Focus` band lands `Off`-on-`On` - one solid block, no holes.
+    #[test]
+    fn mono_band_fills_only_for_an_inverted_style() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        let area = Area::new(0, 0, 60, 10);
+        let total = (area.w * area.h) as usize;
+
+        let count = |style: Style, with_text: bool| {
+            let mut disp = MockDisplay::<BinaryColor>::new();
+            disp.set_allow_overdraw(true);
+            {
+                let mut tgt = GraphicsTarget::new(&mut disp, FONT_6X10);
+                tgt.fill_band(area, style);
+                if with_text {
+                    tgt.draw_text(0, 0, "Bright", style);
+                }
+            }
+            let mut on = 0;
+            for y in area.y..area.y + area.h {
+                for x in area.x..area.x + area.w {
+                    if disp.get_pixel(Point::new(x as i32, y as i32)) == Some(BinaryColor::On) {
+                        on += 1;
+                    }
+                }
+            }
+            on
+        };
+
+        assert_eq!(count(Style::Focus, false), total, "Focus must fill the row");
+        assert_eq!(count(Style::Normal, false), 0, "Normal must not fill");
+        // Glyphs punch dark holes in the band, but the band survives around them:
+        // the row stays overwhelmingly lit, which is what "one block" means.
+        let with_text = count(Style::Focus, true);
+        assert!(with_text < total, "the glyphs must be readable on the band");
+        assert!(
+            with_text * 10 > total * 8,
+            "the band must survive the text: {with_text}/{total} lit"
+        );
     }
 
     /// A style the theme does not invert (`Muted`) renders like `Normal`.
