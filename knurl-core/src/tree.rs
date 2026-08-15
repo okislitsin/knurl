@@ -104,6 +104,14 @@ impl<const N: usize> TreeModel for [TreeItem<'_>; N] {
 /// ## Capacity
 /// Expansion is a `u64` bitmask, so at most **64 nodes** can be expanded
 /// individually; nodes at index `>= 64` are always collapsed.
+///
+/// ## Elm cycle note
+/// The visible-row count is captured from `area.h / line_height` on each
+/// [`view`](Tree::view) call and consumed by the next [`update`](Tree::update) to
+/// compute scroll offsets. In the standard embedded loop - **render, then handle
+/// input** - this is always in sync. Before the first frame it is `usize::MAX`
+/// ("everything fits"), so an `update` that arrives ahead of any `view` moves
+/// the cursor without scrolling the window under it.
 pub struct Tree<'a, M: TreeModel + ?Sized = [TreeItem<'a>]> {
     model: &'a M,
     selected: usize,
@@ -126,6 +134,7 @@ impl<'a, M: TreeModel + ?Sized> Tree<'a, M> {
             expanded: 0,
             focused: false,
             indent: 8, // per-depth indent, in pixels
+            // usize::MAX → "everything fits" until the first view() call.
             page_size: Cell::new(usize::MAX),
             dirty: Cell::new(true),
         }

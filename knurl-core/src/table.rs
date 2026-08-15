@@ -70,6 +70,14 @@ impl<const R: usize, const C: usize> TableModel for [[&str; C]; R] {
 /// `Muted` in the same ink. The column is reserved either way, so the layout
 /// does not shift as focus moves; [`Marker::NONE`] gives it up. Scrolls (never
 /// truncates) with the built-in scroll indicator.
+///
+/// ## Elm cycle note
+/// The visible-row count is captured from `area.h / line_height` on each
+/// [`view`](Table::view) call and consumed by the next [`update`](Table::update) to
+/// compute scroll offsets. In the standard embedded loop - **render, then handle
+/// input** - this is always in sync. Before the first frame it is `usize::MAX`
+/// ("everything fits"), so an `update` that arrives ahead of any `view` moves
+/// the cursor without scrolling the window under it.
 pub struct Table<'a, M: TableModel + ?Sized> {
     model: &'a M,
     headers: Option<&'a [&'a str]>,
@@ -96,6 +104,7 @@ impl<'a, M: TableModel + ?Sized> Table<'a, M> {
             offset: 0,
             focused: false,
             marker: Marker::ARROW,
+            // usize::MAX → "everything fits" until the first view() call.
             page_size: Cell::new(usize::MAX),
             dirty: Cell::new(true),
         }

@@ -31,6 +31,14 @@ fn truncate(s: &str, max: usize) -> &str {
 /// `area.h / line_height`, rows `Muted` with the cursor row following the focus
 /// language (see [`draw_cursor_band`]), and the same built-in scroll indicator on
 /// overflow.
+///
+/// ## Elm cycle note
+/// The visible-row count is captured from `area.h / line_height` on each
+/// [`view`](Radio::view) call and consumed by the next [`update`](Radio::update) to
+/// compute scroll offsets. In the standard embedded loop - **render, then handle
+/// input** - this is always in sync. Before the first frame it is `usize::MAX`
+/// ("everything fits"), so an `update` that arrives ahead of any `view` moves
+/// the cursor without scrolling the window under it.
 #[derive(Debug)]
 pub struct Radio<'a> {
     options: &'a [&'a str],
@@ -56,6 +64,7 @@ impl<'a> Radio<'a> {
             offset: 0,
             focused: false,
             marker: Marker::ARROW,
+            // usize::MAX → "everything fits" until the first view() call.
             page_size: Cell::new(usize::MAX),
             dirty: Cell::new(true),
         }
