@@ -25,7 +25,6 @@ pub struct Dialog<'a> {
     buttons: &'a [&'a str],
     selected: usize,
     border: BorderStyle,
-    confirmed: bool,
     // Repaint gate: set on button-selection change. A modal also needs a full
     // repaint when it opens (it draws over screen content) - the app calls
     // [`mark_dirty`](Component::mark_dirty) then.
@@ -40,7 +39,6 @@ impl<'a> Dialog<'a> {
             buttons,
             selected: 0,
             border: BorderStyle::Rounded,
-            confirmed: false,
             dirty: Cell::new(true),
         }
     }
@@ -74,15 +72,6 @@ impl<'a> Dialog<'a> {
     pub fn selected_button(&self) -> &'a str {
         self.buttons.get(self.selected).copied().unwrap_or("")
     }
-
-    pub fn is_confirmed(&self) -> bool {
-        self.confirmed
-    }
-
-    /// Clears the confirmed flag.
-    pub fn reset(&mut self) {
-        self.confirmed = false;
-    }
 }
 
 impl<'a> Component for Dialog<'a> {
@@ -101,11 +90,8 @@ impl<'a> Component for Dialog<'a> {
             }
             // Confirm changes no on-screen pixels of the dialog itself - so no
             // dirty - but it is precisely the moment the app acts on: it reads
-            // selected_button() (or is_confirmed()) and closes the modal.
-            Msg::Select => {
-                self.confirmed = true;
-                Outcome::Activated
-            }
+            // `selected_button()` and closes the modal.
+            Msg::Select => Outcome::Activated,
             // Either end of the button row, or a message that is not ours.
             _ => Outcome::Ignored,
         }
@@ -413,10 +399,8 @@ mod tests {
         assert_eq!(d.selected_button(), "No");
         let _ = d.update(&Msg::Up);
         assert_eq!(d.selected(), 0);
-        let _ = d.update(&Msg::Select);
-        assert!(d.is_confirmed());
-        d.reset();
-        assert!(!d.is_confirmed());
+        assert_eq!(d.update(&Msg::Select), Outcome::Activated);
+        assert_eq!(d.selected_button(), "Yes", "and it says which button");
     }
 
     #[test]

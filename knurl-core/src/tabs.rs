@@ -623,7 +623,7 @@ mod tests {
         }
         assert!(pages.in_content(), "entered from below → inside the page");
         assert_eq!(content.entered_from, Some(Entry::Bottom));
-        assert!(back.take_pressed(), "the press reached the application");
+        assert_eq!(chain.focus_index(), 0, "and the chain is back in the tabs");
     }
 
     /// Leaving through the chain must reset the mode, or the tab area comes

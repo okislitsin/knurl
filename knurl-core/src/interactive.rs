@@ -314,18 +314,19 @@ impl<'a> Component for Toggle<'a> {
 
 // ── Button ──────────────────────────────────────────────────────────────────
 
-/// A focusable, momentary action item: [`Msg::Select`] latches a one-shot
-/// "pressed" flag, read (and cleared) via [`take_pressed`](Button::take_pressed).
+/// A focusable, momentary action item: [`Msg::Select`] on it reports
+/// [`Activated`](Outcome::Activated).
 ///
-/// Unlike [`Checkbox`]/[`Toggle`], a `Button` carries no persistent value - it
-/// just reports "activated since you last asked", the same poll-after-update
-/// convention every other widget uses (see [`List::selected`](crate::List::selected)),
-/// specialised for a momentary action instead of a state.
+/// Unlike [`Checkbox`]/[`Toggle`], a `Button` carries no state at all - the
+/// press *is* the outcome of the event, so nothing is latched and there is
+/// nothing to poll. Which button was pressed is a question for the container
+/// that routed the event: [`FocusChain::focus_index`](crate::FocusChain::focus_index)
+/// for a screen's zones, [`Form::focus_index`](crate::Form::focus_index) for a
+/// form's fields.
 #[derive(Debug)]
 pub struct Button<'a> {
     label: &'a str,
     focused: bool,
-    pressed: bool,
     dirty: Cell<bool>,
 }
 
@@ -334,27 +335,16 @@ impl<'a> Button<'a> {
         Self {
             label,
             focused: false,
-            pressed: false,
             dirty: Cell::new(true),
         }
-    }
-
-    /// Returns whether the button was pressed since the last call, clearing
-    /// the flag (`core::mem::take`) so a press is only ever reported once.
-    pub fn take_pressed(&mut self) -> bool {
-        core::mem::take(&mut self.pressed)
     }
 }
 
 impl<'a> Component for Button<'a> {
     fn update(&mut self, msg: &Msg) -> Outcome {
         if let Msg::Select = msg {
-            // No dirty: `pressed` is a latch the app polls, not something the
-            // button draws, so a press changes no pixel. (It is also cleared by
-            // `take_pressed` before the next frame, so there would be nothing
-            // left to render by the time a repaint ran.) The press itself is
-            // reported here - the caller no longer has to poll to hear about it.
-            self.pressed = true;
+            // No dirty: a press changes no pixel of the button, it is the
+            // event's outcome and nothing else.
             return Outcome::Activated;
         }
         // A button has nowhere to move: Up/Down belong to the focus container.
@@ -1154,16 +1144,6 @@ mod tests {
     }
 
     #[test]
-    fn button_select_sets_and_take_pressed_clears() {
-        let mut b = Button::new("Go");
-        assert!(!b.take_pressed());
-        let _ = b.update(&Msg::Select);
-        assert!(b.take_pressed());
-        // Consumed - a second call without another Select reports false.
-        assert!(!b.take_pressed());
-    }
-
-    #[test]
     fn button_focus_styles_focus() {
         let mut b = Button::new("Go");
         b.focus();
@@ -1176,16 +1156,15 @@ mod tests {
         );
     }
 
-    /// A press draws nothing - `pressed` is a latch the app polls, not a state
-    /// the button renders - so it must not dirty the gate either.
+    /// A press draws nothing - it is the event's outcome, not a state the
+    /// button renders - so it must not dirty the gate either.
     #[test]
     fn button_press_does_not_dirty() {
         let mut b = Button::new("Go");
         b.mark_clean();
         let _ = b.update(&Msg::Up); // not Select → no change
         assert!(!b.dirty());
-        let _ = b.update(&Msg::Select);
-        assert!(b.take_pressed(), "the press is still latched");
+        assert_eq!(b.update(&Msg::Select), Outcome::Activated);
         assert!(!b.dirty(), "a press changes no pixel");
 
         // Focus does change the picture (the band), so that still dirties.
@@ -1455,15 +1434,14 @@ mod tests {
 
     // ── Outcome (event routing) ─────────────────────────────────────────────
 
-    /// A button is the plainest `Activated` there is - and the press no longer
-    /// has to be fished out with `take_pressed()`.
+    /// A button is the plainest `Activated` there is - and, since the latch
+    /// went, the only way it reports a press.
     #[test]
     fn button_activates_on_select_and_owns_nothing_else() {
         let mut b = Button::new("Go");
         assert_eq!(b.update(&Msg::Up), Outcome::Ignored);
         assert_eq!(b.update(&Msg::Down), Outcome::Ignored);
         assert_eq!(b.update(&Msg::Select), Outcome::Activated);
-        assert!(b.take_pressed(), "the old latch still works alongside it");
     }
 
     /// Flipping itself is internal state, not an app-level action.
