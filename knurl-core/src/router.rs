@@ -70,7 +70,12 @@ pub struct Router<Id, const DEPTH: usize> {
 impl<Id: Copy, const DEPTH: usize> Router<Id, DEPTH> {
     /// Creates a router with `root` as the bottom screen. The root cannot be
     /// popped (`pop` never removes it).
+    ///
+    /// `DEPTH` must be at least 1 - the root always occupies one slot. A
+    /// `Router<_, 0>` fails to compile here rather than indexing an empty stack
+    /// at runtime.
     pub fn new(root: Id) -> Self {
+        const { assert!(DEPTH >= 1, "Router requires DEPTH >= 1") };
         Self {
             stack: [root; DEPTH],
             len: 1,
@@ -193,6 +198,25 @@ mod tests {
         assert!(r.pop());
         assert_eq!(r.current(), S::Menu);
         assert!(!r.pop()); // at root
+        assert_eq!(r.current(), S::Menu);
+        assert_eq!(r.depth(), 1);
+    }
+
+    /// The smallest legal router: root only, nothing to push onto it.
+    /// (`DEPTH = 0` is rejected at compile time by `Router::new`.)
+    #[test]
+    fn router_depth_one_is_root_only() {
+        let mut r = Router::<S, 1>::new(S::Menu);
+        assert_eq!(r.current(), S::Menu);
+        assert_eq!(r.depth(), 1);
+        assert!(r.at_root());
+        assert!(!r.can_pop());
+        assert!(!r.push(S::Settings)); // full at DEPTH = 1
+        assert_eq!(r.current(), S::Menu);
+        assert!(!r.pop()); // never pops the root
+        r.replace(S::Sub);
+        assert_eq!(r.current(), S::Sub);
+        r.reset(S::Menu);
         assert_eq!(r.current(), S::Menu);
         assert_eq!(r.depth(), 1);
     }
