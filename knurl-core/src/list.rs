@@ -1,6 +1,6 @@
 use core::cell::Cell;
 
-use crate::{Area, Component, Marker, Msg, RenderTarget, Style};
+use crate::{Area, Component, Marker, Msg, RenderTarget, Style, V_SCROLL_RESERVE, draw_v_scroll};
 
 // ── ListModel (data provider) ──────────────────────────────────────────────────
 
@@ -56,14 +56,10 @@ fn truncate_str(s: &str, max_chars: usize) -> &str {
     }
 }
 
-// Geometry of the built-in scroll indicator (a thin track + thumb at the right
-// edge, drawn only when the list overflows). The standalone `Scrollbar` widget
-// (in the `info` module) is a separate component; here the indicator is baked
-// directly into `List`.
-const SCROLLBAR_W: u16 = 3;
-const SCROLLBAR_GAP: u16 = 1;
-const TRACK_W: u16 = 1;
-const MIN_THUMB_PX: u16 = 3;
+// The built-in scroll indicator (a thin track + thumb at the right edge, drawn
+// only when the list overflows) comes from the shared [`draw_v_scroll`] helper.
+// The standalone `Scrollbar` widget (in the `info` module) is a separate
+// component; here the indicator is baked directly into `List`.
 
 // ── List ──────────────────────────────────────────────────────────────────────
 
@@ -183,11 +179,7 @@ impl<'a, M: ListModel + ?Sized> Component for List<'a, M> {
 
         // Reserve space on the right for the scroll indicator only when needed.
         let overflowing = n > visible;
-        let bar_w = if overflowing {
-            SCROLLBAR_W + SCROLLBAR_GAP
-        } else {
-            0
-        };
+        let bar_w = if overflowing { V_SCROLL_RESERVE } else { 0 };
         let content_w = area.w.saturating_sub(bar_w);
 
         // The leftmost columns are reserved for the selection-marker prefix.
@@ -222,7 +214,7 @@ impl<'a, M: ListModel + ?Sized> Component for List<'a, M> {
         }
 
         if overflowing {
-            self.draw_scroll_indicator(target, area, n, visible);
+            draw_v_scroll(target, area, n, visible, self.offset);
         }
     }
 
@@ -249,38 +241,6 @@ impl<'a, M: ListModel + ?Sized> Component for List<'a, M> {
     }
 }
 
-impl<'a, M: ListModel + ?Sized> List<'a, M> {
-    /// Draws the thin track + thumb at the right edge via `fill_rect`. The track
-    /// is `TRACK_W` px wide (centred in the `SCROLLBAR_W` band); the thumb spans
-    /// the full band, so it reads as a distinct handle even on monochrome (where
-    /// `fill_rect` ignores the style and the wider thumb is what shows).
-    fn draw_scroll_indicator(
-        &self,
-        target: &mut dyn RenderTarget,
-        area: Area,
-        n: usize,
-        visible: usize,
-    ) {
-        let band_x = area.x + area.w - SCROLLBAR_W;
-        let track_x = band_x + (SCROLLBAR_W - TRACK_W) / 2;
-        target.fill_rect(Area::new(track_x, area.y, TRACK_W, area.h), Style::Muted);
-
-        let track_h = area.h;
-        let thumb_h = (((track_h as usize * visible) / n) as u16)
-            .max(MIN_THUMB_PX)
-            .min(track_h);
-        let max_off = n - visible;
-        let progress = ((track_h - thumb_h) as usize * self.offset)
-            .checked_div(max_off)
-            .unwrap_or(0) as u16;
-        let thumb_y = area.y + progress;
-        target.fill_rect(
-            Area::new(band_x, thumb_y, SCROLLBAR_W, thumb_h),
-            Style::Focus,
-        );
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -292,6 +252,12 @@ mod tests {
     use alloc::vec::Vec;
 
     const ITEMS: &[&str] = &["Alpha", "Beta", "Gamma", "Delta", "Epsilon"];
+
+    // Geometry of the shared scroll indicator (see `crate::draw_v_scroll`), so
+    // the expectations below read in the same terms as the helper.
+    const SCROLLBAR_W: u16 = 3;
+    const TRACK_W: u16 = 1;
+    const MIN_THUMB_PX: u16 = 3;
 
     // Default RecordingTarget metrics: char_width = 6, line_height = 10.
     // So a 30px-tall area shows 3 rows at y = 0, 10, 20; the marker "> " (2 chars)
@@ -506,6 +472,29 @@ mod tests {
         // At max offset the thumb is flush with the bottom of the track.
         let thumb_h = (30 * 3 / 5).max(MIN_THUMB_PX as usize) as u16;
         assert_eq!(thumb_y, 30 - thumb_h);
+    }
+
+    /// A window too narrow for the indicator band must not panic (a u16
+    /// underflow on `area.w - band`) nor draw outside the area. Every case here
+    /// overflows (5 items, at most 3 rows), so the indicator path always runs.
+    #[test]
+    fn tiny_area_draws_nothing_outside_and_never_panics() {
+        for w in [0u16, 1, 2, 3, 4, 5, 12] {
+            for h in [0u16, 1, 9, 10, 30] {
+                let list = List::new(ITEMS);
+                let mut t = RecordingTarget::new(128, 64);
+                let area = Area::new(0, 0, w, h);
+                list.view(&mut t, area);
+                for (a, _) in fills(&t) {
+                    assert!(
+                        u32::from(a.x) + u32::from(a.w) <= u32::from(area.x) + u32::from(area.w)
+                            && u32::from(a.y) + u32::from(a.h)
+                                <= u32::from(area.y) + u32::from(area.h),
+                        "fill {a:?} escapes {area:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
