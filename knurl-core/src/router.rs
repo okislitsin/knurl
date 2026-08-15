@@ -89,7 +89,9 @@
 //!     };
 //!     match outcome {
 //!         Outcome::Activated => {
-//!             if back.take_pressed() && !router.pop() {
+//!             // Which zone did it? The chain's focus index says - here, the
+//!             // last one, which is where "< Back" always sits.
+//!             if chain.focus_index() == 1 && !router.pop() {
 //!                 quit = true; // "Back" at the root means exit
 //!             }
 //!         }

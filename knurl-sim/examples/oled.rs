@@ -525,7 +525,6 @@ impl Demo {
         self.title.set_text(title_for(page));
         match page {
             Page::Indicators => self.spinner.mark_dirty(), // drawn inside the stack
-            Page::DialogP => self.dialog.reset(),
             Page::TextInputP => self.input.reset(),
             Page::TabsP => self.tabs.set_selected(0),
             _ => {}

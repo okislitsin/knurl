@@ -14,7 +14,7 @@
 use knurl_sim::core::{
     Area, Component,
     Constraint::{Fill, Length},
-    Dialog, List, Msg, Spinner, Title, VStack,
+    Dialog, List, Msg, Outcome, Spinner, Title, VStack,
 };
 use knurl_sim::{ColorSimConfig, ColorSimulator, Frame};
 
@@ -44,9 +44,7 @@ fn main() {
         frames += 1;
         for msg in msgs {
             if dialog_open {
-                let _ = dialog.update(msg);
-                if dialog.is_confirmed() {
-                    dialog.reset();
+                if dialog.update(msg) == Outcome::Activated {
                     dialog_open = false;
                     closing = true;
                 }

@@ -952,7 +952,7 @@ mod tests {
         let _ = form.update(&Msg::Down, &mut fields);
         // On the button it is the press the app is waiting for.
         assert_eq!(form.update(&Msg::Select, &mut fields), Outcome::Activated);
-        assert!(go.take_pressed());
+        assert_eq!(form.focus_index(), 1, "the button is the field that did it");
     }
 
     /// While editing, Up/Down belong to the field - so does the verdict on them.

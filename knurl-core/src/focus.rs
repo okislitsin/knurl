@@ -607,7 +607,11 @@ mod tests {
             chain.update(&Msg::Select, &mut zones)
         };
         assert_eq!(outcome, Outcome::Activated);
-        assert!(go.take_pressed(), "the old latch agrees");
+        assert_eq!(
+            form.focus_index(),
+            0,
+            "and the form says which field it was"
+        );
     }
 
     /// What `zone_nav` does by hand in the demos today: run off the end of a
