@@ -1,12 +1,8 @@
-use crate::{Area, Component, Msg, RenderTarget, Style};
+use crate::{Area, Component, Msg, RenderTarget, V_SCROLL_RESERVE, draw_v_scroll};
 
-// Geometry of the built-in scroll indicator (a thin track + thumb at the right
-// edge, drawn only when the field stack overflows the form area). Mirrors the
-// indicator baked into [`List`](crate::List) so the two read identically.
-const SCROLLBAR_W: u16 = 3;
-const SCROLLBAR_GAP: u16 = 1;
-const TRACK_W: u16 = 1;
-const MIN_THUMB_PX: u16 = 3;
+// The built-in scroll indicator (a thin track + thumb at the right edge, drawn
+// only when the field stack overflows the form area) comes from the shared
+// [`draw_v_scroll`] helper, so it reads exactly like [`List`](crate::List)'s.
 
 // ── FormField ─────────────────────────────────────────────────────────────────
 
@@ -204,11 +200,7 @@ impl Form {
         }
 
         // Reserve a thin column for the scroll indicator only when overflowing.
-        let bar_w = if overflowing {
-            SCROLLBAR_W + SCROLLBAR_GAP
-        } else {
-            0
-        };
+        let bar_w = if overflowing { V_SCROLL_RESERVE } else { 0 };
         let content_w = area.w.saturating_sub(bar_w);
 
         // Pass 2: place each field at its cumulative top minus the scroll offset,
@@ -226,35 +218,17 @@ impl Form {
             }
         }
 
+        // The indicator works in pixels rather than items: `area.h` px of the
+        // `total` px stack are visible, starting at pixel `scroll`.
         if overflowing {
-            self.draw_scroll_indicator(target, area, total, scroll);
+            draw_v_scroll(
+                target,
+                area,
+                total as usize,
+                area.h as usize,
+                scroll as usize,
+            );
         }
-    }
-
-    /// Draws the scroll track + thumb at the right edge (see [`List`](crate::List)
-    /// for the matching geometry). Only called when the stack overflows, so
-    /// `total > area.h` and `max_scroll > 0`.
-    fn draw_scroll_indicator(
-        &self,
-        target: &mut dyn RenderTarget,
-        area: Area,
-        total: u16,
-        scroll: u16,
-    ) {
-        let band_x = area.x + area.w - SCROLLBAR_W;
-        let track_x = band_x + (SCROLLBAR_W - TRACK_W) / 2;
-        target.fill_rect(Area::new(track_x, area.y, TRACK_W, area.h), Style::Muted);
-
-        let track_h = area.h;
-        let thumb_h = (((track_h as u32 * area.h as u32) / total as u32) as u16)
-            .max(MIN_THUMB_PX)
-            .min(track_h);
-        let max_scroll = total - area.h;
-        let progress = ((track_h - thumb_h) as u32 * scroll as u32 / max_scroll as u32) as u16;
-        target.fill_rect(
-            Area::new(band_x, area.y + progress, SCROLLBAR_W, thumb_h),
-            Style::Focus,
-        );
     }
 }
 
@@ -273,6 +247,11 @@ mod tests {
     use super::*;
     use crate::mock::{Op, RecordingTarget};
     use crate::{Checkbox, Counter, TextInput, Toggle};
+
+    // Geometry of the shared scroll indicator (see `crate::draw_v_scroll`), so
+    // the expectations below read in the same terms as the helper.
+    const SCROLLBAR_W: u16 = 3;
+    const TRACK_W: u16 = 1;
 
     /// A field with a fixed, configurable height that draws its tag at the row
     /// origin - lets layout tests read each field's `y` straight from the ops.
@@ -526,6 +505,39 @@ mod tests {
         assert!(fills.iter().any(|&(a, st)| st == crate::Style::Focus
             && a.w == SCROLLBAR_W
             && a.x == 120 - SCROLLBAR_W));
+    }
+
+    /// A window too narrow for the indicator band must not panic (a u16
+    /// underflow on `area.w - band`) nor draw outside the area. Five 10px fields
+    /// overflow every height tried here, so the indicator path always runs.
+    #[test]
+    fn form_tiny_area_draws_nothing_outside_and_never_panics() {
+        let a = Probe::new("A", 10);
+        let b = Probe::new("B", 10);
+        let c = Probe::new("C", 10);
+        let d = Probe::new("D", 10);
+        let e = Probe::new("E", 10);
+        let fields: [&dyn FormField; 5] = [&a, &b, &c, &d, &e];
+        let form = Form::new();
+
+        for w in [0u16, 1, 2, 3, 4, 5, 12] {
+            for h in [0u16, 1, 9, 10, 30] {
+                let mut t = RecordingTarget::new(128, 64);
+                let area = Area::new(0, 0, w, h);
+                form.view(&mut t, area, &fields);
+                for op in t.ops() {
+                    if let Op::Fill { area: f, .. } = op {
+                        assert!(
+                            u32::from(f.x) + u32::from(f.w)
+                                <= u32::from(area.x) + u32::from(area.w)
+                                && u32::from(f.y) + u32::from(f.h)
+                                    <= u32::from(area.y) + u32::from(area.h),
+                            "fill {f:?} escapes {area:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
