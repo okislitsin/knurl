@@ -438,6 +438,13 @@ impl FocusZone for FormZone<'_, '_> {
         self.form.is_editing()
     }
 
+    /// A form whose field set came out empty - every field hidden by the mode
+    /// the screen is in - has nowhere to put a cursor, so the focus skips it
+    /// instead of stopping on nothing for one click.
+    fn is_focusable(&self) -> bool {
+        !self.fields.is_empty()
+    }
+
     fn invalidate(&self) {
         for f in self.fields.iter() {
             f.mark_dirty();
@@ -822,6 +829,77 @@ mod tests {
         }
         assert_eq!(head.entered.get(), 0);
         assert_eq!(tail.entered.get(), 0);
+    }
+
+    /// The whole static half of the catalog: none of these can use an event,
+    /// so none of them is a stop for the cursor.
+    #[test]
+    fn static_widgets_refuse_the_focus() {
+        use crate::{
+            BarChart, LineGauge, ProgressBar, Scrollbar, Separator, Spacer, Spinner, StatusBar,
+            Title,
+        };
+        const BARS: &[(&str, u16)] = &[("a", 1)];
+
+        let checks: [(&str, bool); 10] = [
+            ("Label", Label::new("x").is_focusable()),
+            ("Title", Title::new("x").is_focusable()),
+            ("Separator", Separator::new().is_focusable()),
+            ("Spacer", Spacer::new().is_focusable()),
+            ("StatusBar", StatusBar::new().is_focusable()),
+            ("ProgressBar", ProgressBar::new().is_focusable()),
+            ("LineGauge", LineGauge::new().is_focusable()),
+            ("Scrollbar", Scrollbar::new().is_focusable()),
+            ("BarChart", BarChart::new(BARS).is_focusable()),
+            ("Spinner", Spinner::new().is_focusable()),
+        ];
+        for (name, focusable) in checks {
+            assert!(!focusable, "{name} still takes the focus");
+        }
+
+        // ...while everything that can spend an Up/Down stays a stop.
+        const ITEMS: &[&str] = &["a"];
+        assert!(List::new(ITEMS).is_focusable());
+        assert!(Button::new("Go").is_focusable());
+        assert!(Checkbox::new("x").is_focusable());
+    }
+
+    /// The layout case, end to end: captions and chrome between the widgets.
+    #[test]
+    fn a_chain_steps_over_the_chrome_around_its_widgets() {
+        use crate::{StatusBar, Title};
+        const ITEMS: &[&str] = &["Alpha", "Beta"];
+
+        let mut title = Title::new("Sensors");
+        let mut list = List::new(ITEMS);
+        let mut status = StatusBar::new();
+        let mut back = Button::new("< Back");
+        let mut chain = FocusChain::new();
+        let mut zones: [&mut dyn FocusZone; 4] = [&mut title, &mut list, &mut status, &mut back];
+
+        chain.sync_focus(&mut zones);
+        assert_eq!(chain.focus_index(), 1, "the title is not a stop");
+        let _ = chain.update(&Msg::Down, &mut zones); // inside the list
+        assert_eq!(chain.update(&Msg::Down, &mut zones), Outcome::Consumed);
+        assert_eq!(chain.focus_index(), 3, "the status bar was skipped");
+    }
+
+    /// A form with no fields is nowhere to put a cursor - the very "click that
+    /// does nothing" this is all about.
+    #[test]
+    fn a_form_with_no_fields_refuses_the_focus() {
+        const ITEMS: &[&str] = &["Alpha"];
+        let mut list = List::new(ITEMS);
+        let mut form = Form::new();
+        let mut none: [&mut dyn FormField; 0] = [];
+        let mut chain = FocusChain::new();
+
+        let mut zone = form.zone(&mut none);
+        let mut zones: [&mut dyn FocusZone; 2] = [&mut zone, &mut list];
+        assert!(!zones[0].is_focusable());
+
+        chain.sync_focus(&mut zones);
+        assert_eq!(chain.focus_index(), 1, "the focus went straight past it");
     }
 
     /// The degenerate chain: nothing in it can hold the focus. It must not spin

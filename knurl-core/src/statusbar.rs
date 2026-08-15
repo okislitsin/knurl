@@ -77,6 +77,11 @@ impl<'a> Component for StatusBar<'a> {
         Outcome::Ignored
     }
 
+    fn focusable(&self) -> bool {
+        // Static: it can never use an event, so the cursor does not stop here.
+        false
+    }
+
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
         if area.w == 0 || area.h == 0 {
             return;

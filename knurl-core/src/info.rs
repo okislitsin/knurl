@@ -114,6 +114,12 @@ impl Component for Spinner {
         Outcome::Ignored
     }
 
+    fn focusable(&self) -> bool {
+        // An activity indicator is driven by the application ticking it, not by
+        // the encoder: there is nothing here for the cursor to stop on.
+        false
+    }
+
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
         if area.w == 0 || area.h == 0 {
             return;
@@ -198,6 +204,11 @@ impl Component for ProgressBar {
         Outcome::Ignored
     }
 
+    fn focusable(&self) -> bool {
+        // Static: it can never use an event, so the cursor does not stop here.
+        false
+    }
+
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
         if area.w == 0 || area.h == 0 {
             return;
@@ -246,6 +257,11 @@ impl Component for LineGauge {
     fn update(&mut self, _msg: &Msg) -> Outcome {
         // Driven externally via set_value(), so no event is ever ours.
         Outcome::Ignored
+    }
+
+    fn focusable(&self) -> bool {
+        // Static: it can never use an event, so the cursor does not stop here.
+        false
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
@@ -326,6 +342,11 @@ impl Component for Scrollbar {
     fn update(&mut self, _msg: &Msg) -> Outcome {
         // Driven externally via set(), so no event is ever ours.
         Outcome::Ignored
+    }
+
+    fn focusable(&self) -> bool {
+        // Static: it can never use an event, so the cursor does not stop here.
+        false
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
