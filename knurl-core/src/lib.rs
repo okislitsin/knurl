@@ -24,7 +24,7 @@ mod tree;
 pub use basics::{Separator, Spacer, Title};
 pub use chart::{BarChart, BarChartModel};
 pub use dialog::Dialog;
-pub use focus::{Entry, FocusChain, FocusZone, FormZone};
+pub use focus::{Entry, FocusChain, FocusZone, FormZone, NoZone, ScrollZone};
 pub use form::{Form, FormField};
 pub use help::Help;
 pub use info::{LineGauge, Paginator, ProgressBar, Scrollbar, Spinner, SpinnerStyle};
