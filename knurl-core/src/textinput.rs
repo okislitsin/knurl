@@ -65,8 +65,21 @@ impl<'a, const N: usize> TextInput<'a, N> {
         }
     }
 
-    /// Sets the candidate character set. **Must** be printable ASCII.
+    /// Sets the candidate character set. **Must** be printable ASCII
+    /// (`0x20..=0x7E`) - the buffer stores each chosen character as `c as u8`,
+    /// so anything else is silently truncated to a stray byte. Checked with a
+    /// `debug_assert`, which is where a contract with no runtime cost belongs:
+    /// the charset is a compile-time constant in every real use.
     pub const fn with_charset(mut self, cs: &'static str) -> Self {
+        let b = cs.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            debug_assert!(
+                b[i] >= 0x20 && b[i] <= 0x7E,
+                "TextInput charset must be printable ASCII"
+            );
+            i += 1;
+        }
         self.charset = cs;
         self
     }
@@ -342,6 +355,23 @@ mod tests {
         ti.update(&Msg::Up); // candidate → done ((0 + 4 - 1) % 4 = 3)
         ti.update(&Msg::Select);
         assert!(ti.is_done());
+    }
+
+    /// The charset contract ("printable ASCII", because the buffer stores
+    /// `c as u8`) is now checked instead of silently truncating: `'Я' as u8`
+    /// used to land a stray byte in the buffer.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "printable ASCII")]
+    fn textinput_rejects_a_non_ascii_charset() {
+        let _ = TextInput::<8>::new("X").with_charset("ЙЦУ");
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "printable ASCII")]
+    fn textinput_rejects_a_control_charset() {
+        let _ = TextInput::<8>::new("X").with_charset("A\tB");
     }
 
     #[test]

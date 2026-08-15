@@ -299,9 +299,11 @@ struct Core {
 impl Core {
     /// Runs until the window closes or the callback returns [`Flow::Quit`].
     ///
-    /// This is the **immediate-mode** loop: every frame clears, redraws and
-    /// presents. For the dirty-gated loop that skips unchanged frames, see
-    /// [`run_gated`](Core::run_gated).
+    /// This is the **immediate-mode** loop: every frame redraws and presents.
+    /// There is no per-frame global clear - the screen is cleared once before
+    /// the first frame and each widget clears its own area inside `view`
+    /// thereafter (see [`draw_frame`](Core::draw_frame)). For the loop that also
+    /// skips presenting an unchanged frame, see [`run_gated`](Core::run_gated).
     fn run<F, R>(&mut self, backend: &mut dyn Backend, mut on_frame: F)
     where
         F: FnMut(&mut dyn RenderTarget, &[Msg]) -> R,
@@ -517,6 +519,13 @@ impl Simulator {
     /// `on_frame` wires up the Elm cycle - `for m in msgs { c.update(m) }` then
     /// `c.view(target, area)`. The target is a `&mut dyn RenderTarget`. Return
     /// `()` to keep running, or [`Flow::Quit`] to exit.
+    ///
+    /// Every frame is presented, but **not** globally cleared: the screen is
+    /// cleared once before the first frame, and each widget clears its own area
+    /// inside `view`. Widgets still self-gate on their dirty flag here, so a
+    /// clean one paints nothing; the difference from
+    /// [`run_gated`](Simulator::run_gated) is that this loop presents the window
+    /// regardless.
     pub fn run<F, R>(&mut self, on_frame: F)
     where
         F: FnMut(&mut dyn RenderTarget, &[Msg]) -> R,
