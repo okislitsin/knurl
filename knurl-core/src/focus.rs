@@ -71,6 +71,20 @@ pub trait FocusZone {
         false
     }
 
+    /// Whether the focus may stop here at all. Default `true`.
+    ///
+    /// A zone that answers `false` is **stepped over**: the chain neither
+    /// [enters](FocusZone::enter) it nor hands it an event. That is what a
+    /// caption between two widgets needs - a [`Label`](crate::Label) handles
+    /// nothing, so giving it the focus costs the user an encoder click that
+    /// visibly does nothing.
+    ///
+    /// For a plain widget this is [`Component::focusable`], so a widget opts
+    /// out once and is skipped in every chain it joins.
+    fn is_focusable(&self) -> bool {
+        true
+    }
+
     /// Marks the zone for repaint - the invalidation cascade. For a plain
     /// widget, [`Component::mark_dirty`].
     fn invalidate(&self) {}
@@ -80,6 +94,10 @@ pub trait FocusZone {
 impl<T: Component + ?Sized> FocusZone for T {
     fn handle(&mut self, msg: &Msg) -> Outcome {
         self.update(msg)
+    }
+
+    fn is_focusable(&self) -> bool {
+        self.focusable()
     }
 
     fn enter(&mut self, _from: Entry) {
@@ -123,6 +141,12 @@ impl<T: Component + ?Sized> FocusZone for T {
 /// the signal to the application ("`Back` at the root means quit"), and the
 /// hook a chain of chains will hang off later.
 ///
+/// Zones that [refuse the focus](FocusZone::is_focusable) - captions, rules,
+/// anything static - are **stepped over** on the way past and never entered, so
+/// a screen can put its labels in the chain and keep the array in reading
+/// order. A chain where *nothing* is focusable is inert: it enters nobody and
+/// hands every event back.
+///
 /// ## Known limitation: where the cursor lands
 ///
 /// For a plain widget [`FocusZone::enter`] is [`Component::focus`], which knows
@@ -146,11 +170,18 @@ impl<T: Component + ?Sized> FocusZone for T {
 #[derive(Debug, Default)]
 pub struct FocusChain {
     focus: usize,
+    /// Which zone the chain last handed the focus to, and how many zones there
+    /// were at the time - what makes [`sync_focus`](FocusChain::sync_focus)
+    /// idempotent (see its docs).
+    entered: Option<(usize, usize)>,
 }
 
 impl FocusChain {
     pub const fn new() -> Self {
-        Self { focus: 0 }
+        Self {
+            focus: 0,
+            entered: None,
+        }
     }
 
     /// Index of the zone currently holding the focus.
@@ -158,20 +189,81 @@ impl FocusChain {
         self.focus
     }
 
-    /// Enters the current zone and leaves the rest. Call once after building the
+    /// Enters the focused zone and leaves the rest. Call it after building the
     /// screen (and whenever the zone set changes) so the initial focus renders.
     ///
     /// The focused zone is entered [`Top`](Entry::Top) - this is screen setup,
     /// not navigation, so a zone that places its cursor on entry (a form) starts
-    /// at its first element.
-    pub fn sync_focus(&self, zones: &mut [&mut dyn FocusZone]) {
+    /// at its first element. Zones that
+    /// [refuse the focus](FocusZone::is_focusable) are skipped, so the cursor
+    /// starts on the first zone that can actually use it; if no zone can, every
+    /// zone is left and the chain stays out of the way.
+    ///
+    /// **Calling it after every event is safe.** The chain remembers which zone
+    /// it handed the focus to, and re-entering it would be exactly the trap
+    /// worth warning about - `enter(Top)` sends a form back to its first field,
+    /// so a screen that re-synced on each event would find its cursor unable to
+    /// move. A repeat call therefore only re-asserts the other zones' `leave`.
+    /// A change in the number of zones counts as a new screen and does enter
+    /// again; a set that changed *without* changing length does not, so place
+    /// the cursor with [`focus_zone`](FocusChain::focus_zone) after that kind of
+    /// change.
+    pub fn sync_focus(&mut self, zones: &mut [&mut dyn FocusZone]) {
+        let n = zones.len();
+        if n == 0 {
+            self.entered = None;
+            return;
+        }
+        if self.focus >= n {
+            self.focus = n - 1;
+        }
+        let Some(target) = Self::seek_any(zones, self.focus) else {
+            // A chain of captions: nobody here can hold the focus.
+            for z in zones.iter_mut() {
+                z.leave();
+            }
+            self.entered = None;
+            return;
+        };
+        self.focus = target;
+        let first_time = self.entered != Some((target, n));
         for (i, z) in zones.iter_mut().enumerate() {
-            if i == self.focus {
-                z.enter(Entry::Top);
+            if i == target {
+                if first_time {
+                    z.enter(Entry::Top);
+                }
             } else {
                 z.leave();
             }
         }
+        self.entered = Some((target, n));
+    }
+
+    /// Places the focus on zone `idx` (or the nearest one after it that will
+    /// take it), entering it from `from`.
+    ///
+    /// This is the way to move the focus from **outside** - what a screen does
+    /// after rebuilding its zones, or when a menu choice should land the cursor
+    /// somewhere specific. Unlike [`sync_focus`](FocusChain::sync_focus) it
+    /// always enters, so the target zone places its own cursor afresh.
+    pub fn focus_zone(&mut self, idx: usize, from: Entry, zones: &mut [&mut dyn FocusZone]) {
+        let n = zones.len();
+        if n == 0 {
+            return;
+        }
+        let Some(target) = Self::seek_any(zones, idx.min(n - 1)) else {
+            return;
+        };
+        self.focus = target;
+        self.entered = None; // force the enter below
+        for (i, z) in zones.iter_mut().enumerate() {
+            if i == target {
+                z.enter(from);
+            } else {
+                z.leave();
+            }
+        }
+        self.entered = Some((target, n));
     }
 
     /// Routes one event, moving the focus between zones when the focused one
@@ -183,6 +275,17 @@ impl FocusChain {
         }
         if self.focus >= n {
             self.focus = n - 1;
+        }
+
+        // 0. The focus can be parked on a zone that will not take it - the
+        //    screen never synced, or the zone set changed under it. Move it
+        //    before anything is routed; if nothing here is focusable, the whole
+        //    chain is inert and every event belongs to the application.
+        if !zones[self.focus].is_focusable() {
+            match Self::seek_any(zones, self.focus) {
+                Some(i) => self.place(zones, i, Entry::Top),
+                None => return Outcome::Ignored,
+            }
         }
 
         // 1. The focused zone gets first refusal.
@@ -198,24 +301,54 @@ impl FocusChain {
             return Outcome::Consumed;
         }
 
-        // 3. The cursor ran off an end of the zone: hand it to the neighbour.
+        // 3. The cursor ran off an end of the zone: hand it to the next
+        //    neighbour that can hold it, stepping over the ones that cannot.
         match msg {
-            Msg::Down if self.focus + 1 < n => {
-                zones[self.focus].leave();
-                self.focus += 1;
-                zones[self.focus].enter(Entry::Top);
-                Outcome::Consumed
-            }
-            Msg::Up if self.focus > 0 => {
-                zones[self.focus].leave();
-                self.focus -= 1;
-                zones[self.focus].enter(Entry::Bottom);
-                Outcome::Consumed
-            }
+            Msg::Down => match Self::seek(zones, self.focus + 1) {
+                Some(i) => {
+                    self.place(zones, i, Entry::Top);
+                    Outcome::Consumed
+                }
+                None => Outcome::Ignored,
+            },
+            Msg::Up if self.focus > 0 => match Self::seek_back(zones, self.focus - 1) {
+                Some(i) => {
+                    self.place(zones, i, Entry::Bottom);
+                    Outcome::Consumed
+                }
+                None => Outcome::Ignored,
+            },
             // Either end of the chain, or an event nobody wanted: back out to
             // the application.
             _ => Outcome::Ignored,
         }
+    }
+
+    /// Hands the focus to zone `idx`, leaving the one that had it.
+    fn place(&mut self, zones: &mut [&mut dyn FocusZone], idx: usize, from: Entry) {
+        if idx != self.focus {
+            zones[self.focus].leave();
+        }
+        self.focus = idx;
+        zones[idx].enter(from);
+        self.entered = Some((idx, zones.len()));
+    }
+
+    /// First zone at or after `start` that will take the focus.
+    fn seek(zones: &[&mut dyn FocusZone], start: usize) -> Option<usize> {
+        (start..zones.len()).find(|&i| zones[i].is_focusable())
+    }
+
+    /// Last zone at or before `start` that will take the focus.
+    fn seek_back(zones: &[&mut dyn FocusZone], start: usize) -> Option<usize> {
+        (0..=start).rev().find(|&i| zones[i].is_focusable())
+    }
+
+    /// The nearest zone that will take the focus, looking down from `start`
+    /// first and then back up - for placing a cursor rather than moving it,
+    /// where either direction is better than nowhere.
+    fn seek_any(zones: &[&mut dyn FocusZone], start: usize) -> Option<usize> {
+        Self::seek(zones, start).or_else(|| Self::seek_back(zones, start))
     }
 
     /// Marks every zone dirty - the cascade for a **structural** transition
@@ -317,7 +450,7 @@ impl FocusZone for FormZone<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Button, Checkbox, Counter, List};
+    use crate::{Button, Checkbox, Counter, Label, List};
     use core::cell::Cell;
 
     /// A zone that records what the chain did to it. It never handles anything,
@@ -341,6 +474,24 @@ mod tests {
         }
         fn invalidate(&self) {
             self.invalidated.set(self.invalidated.get() + 1);
+        }
+    }
+
+    /// A zone that cannot take the focus and counts every attempt to give it
+    /// one anyway.
+    #[derive(Default)]
+    struct Static {
+        entered: Cell<usize>,
+    }
+    impl FocusZone for Static {
+        fn handle(&mut self, _msg: &Msg) -> Outcome {
+            Outcome::Ignored
+        }
+        fn enter(&mut self, _from: Entry) {
+            self.entered.set(self.entered.get() + 1);
+        }
+        fn is_focusable(&self) -> bool {
+            false
         }
     }
 
@@ -568,6 +719,124 @@ mod tests {
             Some(Entry::Bottom),
             "re-entered from below"
         );
+    }
+
+    // ── sync_focus called too often ─────────────────────────────────────────
+
+    /// The trap `sync_focus` used to be: `enter(Top)` sends a form back to its
+    /// first field, so a screen that re-synced after every event (the shape
+    /// every hand-rolled screen has) could never move its cursor. Re-syncing is
+    /// now a no-op on a chain that already placed its focus.
+    #[test]
+    fn re_syncing_after_every_event_leaves_the_cursor_alone() {
+        let (mut one, mut two) = (Checkbox::new("1"), Checkbox::new("2"));
+        let mut fields: [&mut dyn FormField; 2] = [&mut one, &mut two];
+        let mut form = Form::new();
+        let mut chain = FocusChain::new();
+
+        {
+            let mut zone = form.zone(&mut fields);
+            let mut zones: [&mut dyn FocusZone; 1] = [&mut zone];
+            chain.sync_focus(&mut zones);
+            let _ = chain.update(&Msg::Down, &mut zones);
+            chain.sync_focus(&mut zones); // the tempting extra call
+        }
+        assert_eq!(form.focus_index(), 1, "the form jumped back to field 0");
+    }
+
+    /// ...but placing the cursor on purpose still enters the zone afresh.
+    #[test]
+    fn focus_zone_places_the_cursor_from_outside() {
+        let (mut one, mut two) = (Checkbox::new("1"), Checkbox::new("2"));
+        let mut fields: [&mut dyn FormField; 2] = [&mut one, &mut two];
+        let mut form = Form::new();
+        let mut chain = FocusChain::new();
+
+        {
+            let mut zone = form.zone(&mut fields);
+            let mut zones: [&mut dyn FocusZone; 1] = [&mut zone];
+            chain.sync_focus(&mut zones);
+            let _ = chain.update(&Msg::Down, &mut zones);
+            chain.focus_zone(0, Entry::Top, &mut zones);
+        }
+        assert_eq!(form.focus_index(), 0, "re-entered from the top");
+    }
+
+    // ── Zones that cannot take the focus ────────────────────────────────────
+
+    /// The layout case: captions between the widgets. A `Label` handles
+    /// nothing, so the chain used to hand it the focus and then hand the next
+    /// event straight back - one encoder click that did nothing the user could
+    /// see. The chain now steps over it.
+    #[test]
+    fn a_label_in_the_chain_is_stepped_over() {
+        const ITEMS: &[&str] = &["Alpha", "Beta"];
+        let mut caption = Label::new("Settings");
+        let mut list = List::new(ITEMS);
+        let mut spacer = Label::new("Danger zone");
+        let mut back = Button::new("< Back");
+        let mut chain = FocusChain::new();
+        let mut zones: [&mut dyn FocusZone; 4] = [&mut caption, &mut list, &mut spacer, &mut back];
+
+        // Setup lands on the list, not on the caption above it.
+        chain.sync_focus(&mut zones);
+        assert_eq!(chain.focus_index(), 1);
+
+        // Down inside the list, then off its end: straight onto the button.
+        assert_eq!(chain.update(&Msg::Down, &mut zones), Outcome::Consumed);
+        assert_eq!(chain.focus_index(), 1, "still in the list");
+        assert_eq!(chain.update(&Msg::Down, &mut zones), Outcome::Consumed);
+        assert_eq!(chain.focus_index(), 3, "the label in between was skipped");
+        assert_eq!(chain.update(&Msg::Select, &mut zones), Outcome::Activated);
+
+        // And back up, over the same label, onto the list's last item.
+        assert_eq!(chain.update(&Msg::Up, &mut zones), Outcome::Consumed);
+        assert_eq!(chain.focus_index(), 1);
+        assert_eq!(
+            chain.update(&Msg::Up, &mut zones),
+            Outcome::Consumed,
+            "a step inside the list"
+        );
+        // Above the list there is only the caption: the event leaves the chain
+        // instead of parking the focus on it.
+        assert_eq!(chain.update(&Msg::Up, &mut zones), Outcome::Ignored);
+        assert_eq!(chain.focus_index(), 1);
+    }
+
+    /// A static zone is never entered - not on setup, not in passing.
+    #[test]
+    fn a_zone_that_refuses_the_focus_is_never_entered() {
+        let mut head = Static::default();
+        let mut go = Button::new("Go");
+        let mut tail = Static::default();
+        let mut chain = FocusChain::new();
+
+        {
+            let mut zones: [&mut dyn FocusZone; 3] = [&mut head, &mut go, &mut tail];
+            chain.sync_focus(&mut zones);
+            assert_eq!(chain.focus_index(), 1);
+            for msg in [Msg::Down, Msg::Down, Msg::Up, Msg::Up] {
+                assert_eq!(chain.update(&msg, &mut zones), Outcome::Ignored);
+            }
+            assert_eq!(chain.focus_index(), 1, "the focus never left the button");
+        }
+        assert_eq!(head.entered.get(), 0);
+        assert_eq!(tail.entered.get(), 0);
+    }
+
+    /// The degenerate chain: nothing in it can hold the focus. It must not spin
+    /// looking for a home, and every event belongs to the application.
+    #[test]
+    fn a_chain_with_nothing_focusable_hands_every_event_back() {
+        let mut a = Label::new("one");
+        let mut b = Static::default();
+        let mut chain = FocusChain::new();
+        let mut zones: [&mut dyn FocusZone; 2] = [&mut a, &mut b];
+
+        chain.sync_focus(&mut zones);
+        for msg in [Msg::Up, Msg::Down, Msg::Select, Msg::Down] {
+            assert_eq!(chain.update(&msg, &mut zones), Outcome::Ignored);
+        }
     }
 
     #[test]
