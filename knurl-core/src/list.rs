@@ -83,7 +83,9 @@ fn truncate_str(s: &str, max_chars: usize) -> &str {
 /// The visible-row count is captured from `area.h / line_height` on each
 /// [`view`](List::view) call and consumed by the next [`update`](List::update) to
 /// compute scroll offsets. In the standard embedded loop - **render, then handle
-/// input** - this is always in sync.
+/// input** - this is always in sync. Before the first frame it is `usize::MAX`
+/// ("everything fits"), so an `update` that arrives ahead of any `view` moves
+/// the cursor without scrolling the window under it.
 pub struct List<'a, M: ListModel + ?Sized = [&'a str]> {
     model: &'a M,
     selected: usize,

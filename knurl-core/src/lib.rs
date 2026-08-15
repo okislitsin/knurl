@@ -287,6 +287,21 @@ pub struct Marker {
     pub unselected: &'static str,
 }
 
+/// Characters in `s` - `str::chars()` is not usable in a `const fn`, and
+/// [`Marker::new`] has to count in one. A byte that is not a UTF-8
+/// continuation (`0b10xx_xxxx`) starts a character.
+const fn char_count(s: &str) -> usize {
+    let bytes = s.as_bytes();
+    let (mut i, mut n) = (0, 0);
+    while i < bytes.len() {
+        if bytes[i] & 0xC0 != 0x80 {
+            n += 1;
+        }
+        i += 1;
+    }
+    n
+}
+
 impl Marker {
     pub const ARROW: Self = Self {
         selected: "> ",
@@ -298,6 +313,15 @@ impl Marker {
     };
 
     pub const fn new(selected: &'static str, unselected: &'static str) -> Self {
+        // The contract is a fixed-width slot: the marker column is reserved
+        // whether or not a row is selected, so unequal widths shift the text
+        // beside them by a character as the cursor passes. Four widgets carry a
+        // marker now, and the shift is easy to miss on a small panel - so the
+        // contract is checked, not merely written down.
+        debug_assert!(
+            char_count(selected) == char_count(unselected),
+            "Marker::new: `selected` and `unselected` must be the same width"
+        );
         Self {
             selected,
             unselected,
@@ -307,7 +331,7 @@ impl Marker {
     /// Prefix width in characters (the displayed slot width), measured from
     /// `selected`. Both fields are required to share this width.
     pub fn width(&self) -> usize {
-        self.selected.chars().count()
+        char_count(self.selected)
     }
 }
 
@@ -998,6 +1022,22 @@ mod tests {
     #[test]
     fn marker_none_zero_width() {
         assert_eq!(Marker::NONE.width(), 0);
+    }
+
+    /// The slot is reserved on every row, so a marker whose two states are
+    /// different widths shifts the text beside it as the cursor passes.
+    #[test]
+    #[should_panic(expected = "same width")]
+    fn marker_of_two_widths_is_rejected_in_debug() {
+        let _ = Marker::new("> ", "");
+    }
+
+    /// Width is counted in characters, not bytes: a multi-byte glyph and a
+    /// space are the same one-character slot.
+    #[test]
+    fn marker_width_counts_characters_not_bytes() {
+        let m = Marker::new("\u{25b6}", " ");
+        assert_eq!(m.width(), 1);
     }
 
     // ── RenderTarget metrics ──────────────────────────────────────────────────
