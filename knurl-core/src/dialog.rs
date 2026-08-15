@@ -14,6 +14,10 @@ fn truncate(s: &str, max: usize) -> &str {
 /// A modal dialog: a rounded pixel box with an ASCII title, a message, and a row
 /// of selectable buttons. The focused button is drawn `Style::Focus` inside a
 /// thin outline box; `Select` confirms it. Encoder-navigated (Up/Down/Left/Right).
+///
+/// A button row too wide for the box ends in a dimmed `>`: the buttons past it
+/// are still selectable, just not on screen (see
+/// [`selected_button`](Dialog::selected_button)).
 #[derive(Debug)]
 pub struct Dialog<'a> {
     title: &'a str,
@@ -60,6 +64,13 @@ impl<'a> Dialog<'a> {
     }
 
     /// Text of the highlighted button, or `""` when there are no buttons.
+    ///
+    /// This is the **logical** value - the label as the caller passed it in -
+    /// not what the screen shows. In a narrow box a label is truncated to fit,
+    /// and buttons past the row's width are not drawn at all (the row ends in a
+    /// dimmed `>` instead); the selection still moves through every one of them,
+    /// and this still returns the full label. Callers match on this, so it must
+    /// stay the value they gave, whatever the layout could fit.
     pub fn selected_button(&self) -> &'a str {
         self.buttons.get(self.selected).copied().unwrap_or("")
     }
@@ -145,6 +156,7 @@ impl<'a> Component for Dialog<'a> {
         let by = inner.y + inner.h - line_h;
         let right = inner.x + inner.w;
         let mut x = inner.x;
+        let mut drawn = 0usize;
         for (i, b) in self.buttons.iter().enumerate() {
             if x >= right {
                 break;
@@ -171,6 +183,17 @@ impl<'a> Component for Dialog<'a> {
             let style = if focused { Style::Focus } else { Style::Normal };
             target.draw_text(x + cw, by, label, style);
             x = x.saturating_add(cell_w).saturating_add(cw);
+            drawn = i + 1;
+        }
+
+        // Buttons the row could not hold are still *reachable* - `Up`/`Down`
+        // move the selection through all of them - so dropping them in silence
+        // reads as "there are only these". A dimmed `>` in the row's last cell
+        // says there are more, in the one cell the layout guarantees is free:
+        // a label's budget comes off both its padding cells, so drawn text
+        // always ends at or before `right - cw`.
+        if drawn < self.buttons.len() && right >= inner.x + cw {
+            target.draw_text(right - cw, by, ">", Style::Muted);
         }
     }
 
@@ -341,6 +364,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A box too narrow for every button used to drop the rest in silence. The
+    /// row now ends in a `>` so the user knows there is more to turn to.
+    #[test]
+    fn dialog_marks_buttons_that_did_not_fit() {
+        const CW: u16 = 6;
+        // 40px box → inner 1..=38: "Yes" fits, "No" and "Maybe" do not.
+        let btns: &[&str] = &["Yes", "No", "Maybe"];
+        let d = Dialog::new("Confirm", "Sure?", btns);
+        let mut t = RecordingTarget::new(128, 64);
+        d.view(&mut t, Area::new(0, 0, 40, 40));
+
+        let tx = texts(&t);
+        let by = 1 + 38 - 10; // last inner row
+        assert!(tx.iter().any(|(_, y, s, _)| *y == by && s == "Yes"));
+        assert!(!tx.iter().any(|(_, _, s, _)| s == "No" || s == "Maybe"));
+        // The overflow mark sits in the last cell of the row, dimmed.
+        assert!(
+            tx.iter()
+                .any(|(x, y, s, st)| *y == by && s == ">" && *st == Style::Muted && *x == 39 - CW),
+            "no overflow mark: {tx:?}"
+        );
+    }
+
+    /// When every button fits there is nothing to announce.
+    #[test]
+    fn dialog_no_overflow_mark_when_all_buttons_fit() {
+        let d = Dialog::new("Confirm", "Sure?", BTNS);
+        let mut t = RecordingTarget::new(128, 64);
+        d.view(&mut t, Area::new(0, 0, 120, 40));
+        assert!(!texts(&t).iter().any(|(_, _, s, _)| s == ">"));
     }
 
     #[test]
