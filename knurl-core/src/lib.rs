@@ -643,6 +643,19 @@ pub trait Component {
     /// Called when focus leaves this component.
     fn blur(&mut self) {}
 
+    /// Whether the focus is of any use to this component. Default `true`.
+    ///
+    /// A **static** widget overrides it with `false` (a [`Label`] does): it
+    /// handles no event, so a focus container that stops on it costs the user
+    /// an encoder click that does nothing they can see. Read by
+    /// [`FocusZone::is_focusable`](crate::FocusZone::is_focusable), which is
+    /// how a [`FocusChain`](crate::FocusChain) steps over such widgets - and
+    /// the only thing that reads it, so it changes nothing for a widget used
+    /// on its own.
+    fn focusable(&self) -> bool {
+        true
+    }
+
     /// Whether this component needs repainting since it was last
     /// [`mark_clean`](Component::mark_clean)ed.
     ///
@@ -716,6 +729,11 @@ impl<'a> Component for Label<'a> {
     fn update(&mut self, _msg: &Msg) -> Outcome {
         // Labels are static: every event stays available to whoever is next.
         Outcome::Ignored
+    }
+
+    fn focusable(&self) -> bool {
+        // ...and since it can never use one, the focus does not stop here.
+        false
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
