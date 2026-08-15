@@ -49,7 +49,12 @@ The library is genuinely `no_std` and bare-metal portable - the machine proof:
 rustup target add thumbv6m-none-eabi
 cargo build -p knurl-core     --target thumbv6m-none-eabi
 cargo build -p knurl-graphics --target thumbv6m-none-eabi
+cargo build -p knurl-screens  --target thumbv6m-none-eabi   # the demo's own screens
 ```
+
+That last line is the interesting one: `knurl-screens` is the demo application
+itself - every screen you see below - and it links for bare metal, so a screen
+file copies into a firmware project unchanged.
 
 ## Input model - a rotary encoder with one button
 
@@ -117,18 +122,26 @@ Layout: **VStack** / **HStack** (with `Constraint`), **Padded**, **Bordered**.
 
 ## Demos
 
-Two **per-target** examples in `knurl-sim`, each a **full component catalog** tuned
-to its screen (not a shared layout), opening at a `Router` menu. Encoder model
-throughout; every page either fits or **scrolls** (lists/tree/table/pager scroll
-themselves; row pages scroll with a `Scrollbar`) - nothing is truncated. Both run
-on the dirty-gated partial-redraw loop.
+The demo is an **application**, not a gallery: [`knurl-screens`](knurl-screens) is
+a `no_std` crate with **one screen per file**, each implementing
+[`Screen`](knurl-core/src/screen.rs) and owning its widgets. It covers the whole
+catalog, but arranged as compositions - one form, **two forms sharing a layout**,
+**three forms behind tabs**, a **list and a form on one screen** - because a
+library of components that do not work together is not a library.
+
+Two hosts run it, and differ only in what a host provides (panel, theme, chrome,
+frame loop):
 
 - **`oled`** - monochrome, tuned for a tiny SSD1306 (128×64 default; `128x128` via
   arg). Compact chrome for ~5 rows.
 - **`tft`** - colour, 320×240 ST7789-class, the default Charm `ColorTheme`, with a
-  persistent status-bar hint and a **realtime `Pager`** page: a ring-buffer
-  `LinesModel` that gains a line every few ticks (standing in for live UART), in
-  follow/tail mode.
+  persistent status-bar hint and a **live log** behind the Pager screen: a
+  ring-buffer `LinesModel` that gains a line every few ticks (standing in for
+  UART), in follow/tail mode. The screen rendering it is the same file a device
+  builds against a `const` array.
+
+Encoder model throughout; every page either fits or **scrolls** - nothing is
+truncated. Both run on the dirty-gated partial-redraw loop.
 
 <table>
 <tr>
@@ -175,7 +188,8 @@ cargo run -p knurl-sim --features desktop --example screenshots   # → docs/*.p
 | [`knurl-core`](knurl-core)         | ✅ (zero-dep) | - | Traits (`RenderTarget`, `Component`), `Msg`, `Style`, `Area`, `Router`, models, and every widget. |
 | [`knurl-graphics`](knurl-graphics) | ✅ | `embedded-graphics` | `GraphicsTarget` / `ColorGraphicsTarget` adapters + `Theme` / `ColorTheme`. |
 | [`knurl`](knurl)                   | ✅ | core (+ optional graphics) | Facade re-exporting the public API. |
-| [`knurl-sim`](knurl-sim)           | ❌ std | graphics + `embedded-graphics-simulator` | Desktop simulator (mono + colour) and the demos. |
+| [`knurl-screens`](knurl-screens)   | ✅ | `knurl` only | The demo application: one `Screen` per file, shared by both demos, built for `thumbv6m` in CI. |
+| [`knurl-sim`](knurl-sim)           | ❌ std | facade + `embedded-graphics-simulator` | Desktop simulator (mono + colour) and the demo hosts. |
 
 `knurl-sim` is a workspace member but **excluded from `default-members`**, so a
 plain `cargo test` from the root never needs SDL2.
