@@ -157,6 +157,15 @@ impl<'a> Component for Tabs<'a> {
 /// other stop: entered from above it starts on the strip, entered from below it
 /// starts *inside* the page, so walking back up does not skip the whole thing.
 ///
+/// ## Repainting a switched-to page is the application's job
+///
+/// The container only ever holds the **active** tab's page, so it cannot touch
+/// the one arriving on a switch - and a widget that has been off-screen is
+/// usually clean, which means it would draw nothing over the outgoing page's
+/// pixels. When [`Tabs::selected`] changes, clear the page area (or
+/// [`mark_dirty`](Component::mark_dirty) the incoming page) before drawing it,
+/// the same way a screen transition is handled elsewhere.
+///
 /// ```
 /// use knurl_core::{Button, FocusChain, FocusZone, List, Msg, Outcome, TabPages, Tabs};
 ///
