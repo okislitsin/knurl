@@ -4,7 +4,10 @@ use embedded_graphics::{
     mono_font::{MonoFont, MonoTextStyleBuilder},
     pixelcolor::{BinaryColor, Rgb565},
     prelude::*,
-    primitives::{Circle, PrimitiveStyle, Rectangle, RoundedRectangle, Triangle},
+    primitives::{
+        Circle, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, RoundedRectangle,
+        StrokeAlignment, Triangle,
+    },
     text::{Baseline, Text},
 };
 
@@ -346,8 +349,14 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
     /// | `None`         | no-op                                       |
     /// | `Single`       | 1-px stroked rectangle                      |
     /// | `Rounded`      | 1-px stroked `RoundedRectangle` (real corners)|
-    /// | `Thick`        | 2-px stroked rectangle                      |
+    /// | `Thick`        | 2-px stroked rectangle, aligned *inside*    |
     /// | `Double`       | two concentric 1-px rectangles, 2-px apart  |
+    ///
+    /// Every stroke stays within `area`: `Thick` asks for
+    /// [`StrokeAlignment::Inside`] because the default (`Center`) would lay one
+    /// of its two pixels *outside*, clipping at the screen edge and bleeding
+    /// onto the neighbouring widget - and breaking the contract that chrome eats
+    /// exactly [`BorderStyle::thickness`] pixels.
     fn draw_box(&mut self, area: Area, border: BorderStyle) {
         if matches!(border, BorderStyle::None) {
             return;
@@ -379,7 +388,11 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
             }
 
             BorderStyle::Thick => {
-                let style = PrimitiveStyle::with_stroke(BinaryColor::On, 2);
+                let style = PrimitiveStyleBuilder::new()
+                    .stroke_color(BinaryColor::On)
+                    .stroke_width(2)
+                    .stroke_alignment(StrokeAlignment::Inside)
+                    .build();
                 let _ = Rectangle::new(top_left, size)
                     .into_styled(style)
                     .draw(self.display);
@@ -1003,7 +1016,7 @@ where
 
     /// Draw a rectangular border, stroked in the `Normal` foreground colour.
     /// Same geometry rules as the monochrome target (`Single`/`Rounded` 1px,
-    /// `Thick` 2px, `Double` two concentric rectangles).
+    /// `Thick` 2px aligned inside, `Double` two concentric rectangles).
     fn draw_box(&mut self, area: Area, border: BorderStyle) {
         if matches!(border, BorderStyle::None) {
             return;
@@ -1035,7 +1048,11 @@ where
             }
 
             BorderStyle::Thick => {
-                let s = PrimitiveStyle::with_stroke(stroke_color, 2);
+                let s = PrimitiveStyleBuilder::new()
+                    .stroke_color(stroke_color)
+                    .stroke_width(2)
+                    .stroke_alignment(StrokeAlignment::Inside)
+                    .build();
                 let _ = Rectangle::new(top_left, size)
                     .into_styled(s)
                     .draw(self.display);
@@ -1403,6 +1420,48 @@ mod tests {
         assert_eq!(
             mono_on_pixels(Ind::Check, Style::Normal, area),
             mono_on_pixels(Ind::Check, Style::Muted, area)
+        );
+    }
+
+    /// A `Thick` border must stay within its `Area` - the 2px stroke is aligned
+    /// inside, not centred on the boundary (which would spill 1px outwards).
+    #[test]
+    fn mono_thick_border_stays_inside_the_area() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        let mut disp = MockDisplay::<BinaryColor>::new();
+        {
+            let mut tgt = GraphicsTarget::new(&mut disp, FONT_6X10);
+            tgt.draw_box(Area::new(2, 2, 10, 8), BorderStyle::Thick);
+        }
+        assert_eq!(
+            disp.affected_area(),
+            Rectangle::new(Point::new(2, 2), Size::new(10, 8)),
+            "the stroke escapes the area"
+        );
+        // Both stroke rings lit, the interior left untouched.
+        assert_eq!(disp.get_pixel(Point::new(2, 2)), Some(BinaryColor::On));
+        assert_eq!(disp.get_pixel(Point::new(3, 3)), Some(BinaryColor::On));
+        assert_eq!(disp.get_pixel(Point::new(4, 4)), None);
+        assert_eq!(disp.get_pixel(Point::new(11, 9)), Some(BinaryColor::On));
+    }
+
+    /// The colour target aligns its `Thick` stroke the same way.
+    #[test]
+    fn color_thick_border_stays_inside_the_area() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        let mut disp = MockDisplay::<Rgb565>::new();
+        {
+            let mut tgt = ColorGraphicsTarget::new(&mut disp, FONT_6X10);
+            tgt.draw_box(Area::new(2, 2, 10, 8), BorderStyle::Thick);
+        }
+        assert_eq!(
+            disp.affected_area(),
+            Rectangle::new(Point::new(2, 2), Size::new(10, 8)),
+            "the stroke escapes the area"
         );
     }
 }
