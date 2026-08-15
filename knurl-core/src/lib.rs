@@ -347,6 +347,25 @@ pub trait RenderTarget {
     /// primitive behind rules, cursors and solid backgrounds.
     fn fill_rect(&mut self, area: Area, style: Style);
 
+    /// Fills `area` with the **background** of `style` - the band a focused row
+    /// is drawn on, before its text and indicators go on top.
+    ///
+    /// This is the focus language's one primitive: a focused row is a single
+    /// solid block - band, indicator, label and value all in `style` - rather
+    /// than a highlight around the label alone. It cannot be expressed with
+    /// [`fill_rect`](RenderTarget::fill_rect), which paints the style's
+    /// *foreground* (and on monochrome deliberately ignores the style entirely,
+    /// so the scroll indicator's track and thumb stay visible).
+    ///
+    /// The default is a **no-op**: the band is a cue, never content, and every
+    /// glyph on the row already carries `style` itself (a
+    /// [`draw_text`](RenderTarget::draw_text) cell paints its own background),
+    /// so a target that has not implemented it loses the wash between the
+    /// glyphs and nothing else. Filling via `fill_rect` instead would be
+    /// actively wrong: on monochrome that paints the row solid `On` whatever
+    /// the style, hiding rows the theme does not invert.
+    fn fill_band(&mut self, _area: Area, _style: Style) {}
+
     /// Draws a horizontal progress/level bar filling `area` to the fraction
     /// `fill_permille / 1000`, in the given `style`.
     ///
@@ -654,6 +673,14 @@ pub mod mock {
             area: Area,
             style: Style,
         },
+        /// A focus band ([`fill_band`](RenderTarget::fill_band)). Recorded as its
+        /// own op rather than folded into [`Op::Fill`]: a row's band and the
+        /// scroll indicator's track/thumb are both rectangles, and every focus
+        /// test has to tell them apart.
+        Band {
+            area: Area,
+            style: Style,
+        },
         Bar {
             area: Area,
             fill_permille: u16,
@@ -746,6 +773,12 @@ pub mod mock {
             self.ops.push(Op::Fill { area, style });
         }
 
+        // Recorded verbatim (the trait default draws nothing) so tests can
+        // assert on the band itself: where it starts, how wide it runs.
+        fn fill_band(&mut self, area: Area, style: Style) {
+            self.ops.push(Op::Band { area, style });
+        }
+
         // Recorded verbatim (rather than via the fill_rect default) so tests can
         // assert on the semantic bar call and its fraction.
         fn draw_bar(&mut self, area: Area, fill_permille: u16, style: Style) {
@@ -762,6 +795,8 @@ pub mod mock {
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
+
     use super::*;
     use mock::{Op, RecordingTarget};
 
@@ -1009,6 +1044,7 @@ mod tests {
             Op::Text { y, .. } => *y < 12,
             Op::Clear { area }
             | Op::Fill { area, .. }
+            | Op::Band { area, .. }
             | Op::Box { area, .. }
             | Op::Bar { area, .. } => area.y < 12,
         });
@@ -1028,6 +1064,63 @@ mod tests {
                 style: Style::Accent
             }]
         );
+    }
+
+    /// The band is its own op, so a test can tell a focus band from the fills
+    /// the scroll indicator lays down in the same row.
+    #[test]
+    fn fill_band_is_recorded_apart_from_fill() {
+        let mut t = RecordingTarget::new(64, 32);
+        t.fill_band(Area::new(0, 0, 60, 10), Style::Focus);
+        t.fill_rect(Area::new(57, 0, 3, 10), Style::Focus);
+        assert_eq!(
+            t.ops(),
+            &[
+                Op::Band {
+                    area: Area::new(0, 0, 60, 10),
+                    style: Style::Focus
+                },
+                Op::Fill {
+                    area: Area::new(57, 0, 3, 10),
+                    style: Style::Focus
+                },
+            ]
+        );
+    }
+
+    /// The trait's default draws nothing - a target that has not implemented the
+    /// band keeps working, it just loses the wash between the glyphs.
+    #[test]
+    fn fill_band_default_is_a_noop() {
+        struct Bare(alloc::vec::Vec<Area>);
+        impl RenderTarget for Bare {
+            fn width(&self) -> u16 {
+                64
+            }
+            fn height(&self) -> u16 {
+                32
+            }
+            fn is_graphical(&self) -> bool {
+                true
+            }
+            fn line_height(&self) -> u16 {
+                10
+            }
+            fn char_width(&self) -> u16 {
+                6
+            }
+            fn draw_text(&mut self, _x: u16, _y: u16, _t: &str, _s: Style) {}
+            fn draw_box(&mut self, _a: Area, _b: BorderStyle) {}
+            fn clear(&mut self, _a: Area) {}
+            fn fill_rect(&mut self, area: Area, _s: Style) {
+                self.0.push(area);
+            }
+        }
+        let mut t = Bare(alloc::vec::Vec::new());
+        t.fill_band(Area::new(0, 0, 60, 10), Style::Focus);
+        // Notably NOT forwarded to fill_rect: on monochrome that fills `On`
+        // whatever the style, which would black out a row the theme leaves plain.
+        assert!(t.0.is_empty());
     }
 
     #[test]
