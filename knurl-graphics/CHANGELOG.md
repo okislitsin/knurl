@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/okislitsin/knurl/compare/knurl-graphics-v0.1.2...knurl-graphics-v0.1.3) - 2026-08-15
+
+### Added
+
+- draw focus as a band across the whole cursor row
+- add a fill_band primitive for the focus row
+
+### Fixed
+
+- tidy up five inconsistencies around the edges
+- fit the expander triangle inside the indicator square
+- keep the Thick border inside its Area
+- honour the theme's inversion in the mono indicators
+
 ## [0.1.2](https://github.com/okislitsin/knurl/compare/knurl-graphics-v0.1.1...knurl-graphics-v0.1.2) - 2026-07-09
 
 ### Other
