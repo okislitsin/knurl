@@ -27,50 +27,12 @@ use knurl_sim::core::{
 };
 use knurl_sim::graphics::{ColorGraphicsTarget, ColorTheme, GraphicsTarget, Theme};
 
+// The root menu is the demo's, not a copy of it: a screenshot that drifts from
+// the application it claims to show is worse than no screenshot.
+use knurl_screens::MENU;
+
 // ── Demo data (ASCII), mirroring the oled / tft demos ──────────────────────────
 
-const OLED_MENU: &[&str] = &[
-    "Text",
-    "List",
-    "Tree",
-    "Table",
-    "Bar chart",
-    "Toggles",
-    "Editors",
-    "Radio",
-    "Text input",
-    "Pager",
-    "Indicators",
-    "Position",
-    "Tabs",
-    "Status bar",
-    "Help",
-    "Dialog",
-    "Form",
-    "Layout",
-    "Exit",
-];
-const TFT_MENU: &[&str] = &[
-    "Text",
-    "List",
-    "Tree",
-    "Table",
-    "Bar chart",
-    "Toggles",
-    "Editors",
-    "Radio",
-    "Text input",
-    "Pager (live)",
-    "Indicators",
-    "Position",
-    "Tabs",
-    "Status bar",
-    "Help",
-    "Dialog",
-    "Form",
-    "Layout",
-    "Exit",
-];
 const LIST_ITEMS: &[&str] = &[
     "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet",
 ];
@@ -186,10 +148,10 @@ fn main() {
     // Root menu - the catalog, with the built-in scroll indicator. The demo
     // widgets are focused explicitly: the focus band (Phase 2) only shows on the
     // widget the encoder is driving, and a screenshot has no focus manager yet.
-    let mut menu = List::new(OLED_MENU);
+    let mut menu = List::new(MENU);
     menu.focus();
     shoot_mono(128, 64, 4, "oled-menu.png", |t| {
-        let body = oled_chrome(t, "knurl OLED");
+        let body = oled_chrome(t, "knurl");
         menu.view(t, body);
     });
 
@@ -234,16 +196,16 @@ fn main() {
     }
     shoot_mono(128, 64, 4, "oled-form.png", |t| {
         let body = oled_chrome(t, "Editors");
-        let f: [&dyn FormField; 4] = [&counter, &slider, &picker, &back];
+        let f: [&mut dyn FormField; 4] = [&mut counter, &mut slider, &mut picker, &mut back];
         form.view(t, body, &f);
     });
 
     // ── TFT (320x240 colour) ────────────────────────────────────────────────
 
-    let mut tmenu = List::new(TFT_MENU);
+    let mut tmenu = List::new(MENU);
     tmenu.focus();
     shoot_color(320, 240, 2, "tft-menu.png", |t| {
-        let body = tft_chrome(t, "knurl TFT catalog", "Turn: move   Push: open");
+        let body = tft_chrome(t, "knurl", "Turn: move   Push: open");
         tmenu.view(t, body);
     });
 
@@ -268,7 +230,7 @@ fn main() {
 
     let pager = Pager::new(PAGER_LINES).with_follow(true);
     shoot_color(320, 240, 2, "tft-pager.png", |t| {
-        let body = tft_chrome(t, "Pager (live stream)", "Turn: scroll, bottom = follow");
+        let body = tft_chrome(t, "Pager", "Turn: scroll, bottom = follow");
         let top = body_with_back(t, body);
         pager.view(t, top);
     });

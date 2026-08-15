@@ -12,14 +12,20 @@ categories = ["embedded", "development-tools", "simulation"]
 publish = false
 
 [dependencies]
-knurl-core = { path = "../knurl-core", version = "0.2.0" }
-knurl-graphics = { path = "../knurl-graphics", version = "0.1.3" }
+# The facade, exactly as a device project depends on it - so a demo's screen
+# code and a firmware's screen code are written against the same paths.
+knurl = { path = "../knurl", version = "0.1.3", features = ["graphics"] }
 embedded-graphics = "0.8"
 # Pinned to the release that targets embedded-graphics 0.8 - the `DrawTarget`
 # types must unify with knurl-graphics, or `GraphicsTarget` won't accept the
 # `SimulatorDisplay`. Optional so the `web` feature (and `cargo test`) need not
 # pull in SDL2.
 embedded-graphics-simulator = { version = "0.8.0", optional = true }
+
+[dev-dependencies]
+# The demo application itself: no_std screens, shared by both demos and built
+# for thumbv6m in CI.
+knurl-screens = { path = "../knurl-screens" }
 
 [features]
 default = ["desktop"]

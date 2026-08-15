@@ -8,7 +8,7 @@
 //! ```
 //!
 //! `SimulatorDisplay<BinaryColor>` is already a
-//! `DrawTarget<Color = BinaryColor>`, and `knurl_graphics::GraphicsTarget` is
+//! `DrawTarget<Color = BinaryColor>`, and `knurl::graphics::GraphicsTarget` is
 //! generic over that, so the simulator never defines its own `RenderTarget`.
 //! It is just a std wrapper: a window, an event pump, a keyboard→`Msg` map, and
 //! a tick timer.
@@ -20,7 +20,7 @@
 //! # Example
 //! ```ignore
 //! use knurl_sim::{SimConfig, Simulator};
-//! use knurl_core::{Area, Component, List};
+//! use knurl::{Area, Component, List};
 //!
 //! let mut sim = Simulator::new(SimConfig::default());
 //! let items = ["Alpha", "Beta", "Gamma"];
@@ -48,7 +48,8 @@ pub use desktop::{
     Simulator,
 };
 
-// Re-export the underlying crates so downstream code can depend solely on
-// `knurl-sim` for prototyping.
-pub use knurl_core as core;
-pub use knurl_graphics as graphics;
+// Re-export the library so downstream code can depend solely on `knurl-sim`
+// for prototyping. `core` is the facade itself: a screen written against
+// `knurl_sim::core::…` and one written against `knurl::…` are the same screen.
+pub use knurl as core;
+pub use knurl::graphics;

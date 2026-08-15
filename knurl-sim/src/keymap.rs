@@ -7,7 +7,7 @@
 //! it is **not** the default and is not used by any example. See [`Keymap`].
 
 use embedded_graphics_simulator::sdl2::Keycode;
-use knurl_core::Msg;
+use knurl::Msg;
 
 /// Translates SDL key presses into [`Msg`] values.
 ///

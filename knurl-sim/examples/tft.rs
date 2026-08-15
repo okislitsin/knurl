@@ -1,123 +1,45 @@
-//! TFT demo - a **full component catalog** for a 320x240 colour panel, the
-//! colour twin of `oled.rs`.
+//! TFT demo - the same [`knurl_screens`] application on a 320x240 colour panel.
 //!
-//! - Renders through `ColorSimulator` + the shipped Charm [`ColorTheme`] - calm
-//!   palette, no hardcoded RGB, no bright blocks. Selection reads as a lilac
-//!   highlight, accents as coloured text.
-//! - Navigation is driven by [`Router`] (same pattern as the OLED demo): a root
-//!   menu (`List`) whose selection `push`es a component page; every page has a
-//!   focusable `< Back` item that `pop`s; the root `Exit` quits via [`Frame::Quit`].
-//!   Opens on the menu. **Back is always a separate item, never in widget data.**
-//! - Rendered through the **dirty-gated partial-redraw loop**
-//!   ([`ColorSimulator::run_gated`]): idle frames are skipped; a painted frame
-//!   redraws only what changed (so animation / the streaming Pager repaint their
-//!   own area, not the whole 320x240). Transitions force a clean full redraw.
-//! - Input is routed by [`FocusChain`]: each page lists its focus zones once
-//!   (see `Demo::with_zones`) and the chain walks the cursor between them, so
-//!   "`Down` past the end lands on `< Back`" is not page code. The application
-//!   only acts on what comes back out - an `Activated` from the last zone is a
-//!   `pop`. Tabs are a [`TabPages`]: rotation switches tabs, `Select` would
-//!   enter the page under them.
-//! - **Realtime Pager page:** a ring-buffer `LinesModel` (`StreamLog`) gains a
-//!   line every few ticks - standing in for live UART - with follow/tail mode
-//!   keeping the newest line visible.
-//! - **Scroll-always:** anything taller than the screen scrolls; nothing truncates.
-//! - Encoder model only: Up/Down/Select. Editable fields show an edit cue.
+//! It runs the **same screens** as `oled.rs`, from the same `no_std` crate, and
+//! differs only in what a host provides: the panel and its theme, the chrome
+//! (a title row and a status-bar hint), and - because a desktop can - a **live
+//! log** behind the Pager screen.
 //!
-//! ASCII text only (the mono font is ASCII; non-ASCII renders blank).
+//! That log is the point of the [`LinesModel`] seam: `StreamLog` here is a
+//! `std` ring buffer that grows while the user watches it, and the Pager screen
+//! that renders it is the same file a device builds against a `const` array. No
+//! screen knows which it got.
 //!
-//! Run with: `cargo run -p knurl-sim --example tft`
+//! Rendered through the shipped Charm [`ColorTheme`] - calm palette, no
+//! hardcoded RGB - and the dirty-gated partial-redraw loop
+//! ([`ColorSimulator::run_gated`]).
+//!
+//! Encoder model only: Up / Down / Select. ASCII text only.
+//!
+//! ```sh
+//! cargo run -p knurl-sim --example tft
+//! ```
 
-use core::cell::Cell;
 use std::cell::RefCell;
 
-use knurl_sim::core::{
-    Align, Area, BarChart, BorderStyle, Button, Checkbox, Component,
+use knurl::{
+    Align, Area, Component,
     Constraint::{Fill, Length},
-    Counter, Dialog, Entry, FocusChain, FocusZone, Form, FormField, HStack, Help, Label, LineGauge,
-    LinesModel, List, Msg, Outcome, Padded, Padding, Pager, Paginator, Picker, ProgressBar, Radio,
-    RenderTarget, Router, Scrollbar, Separator, Slider, Spinner, StatusBar, Style, TabPages, Table,
-    Tabs, TextInput, Title, Toggle, Tree, TreeItem, VStack,
+    LinesModel, Msg, StatusBar, Title, VStack,
 };
+use knurl_screens::{App, Panel};
 use knurl_sim::{ColorSimConfig, ColorSimulator, Frame};
 
-// ── Catalog data (all ASCII) ───────────────────────────────────────────────────
+// ── A live log (the host's, not the screen's) ─────────────────────────────────
 
-const MENU: &[&str] = &[
-    "Text",
-    "List",
-    "Tree",
-    "Table",
-    "Bar chart",
-    "Toggles",
-    "Editors",
-    "Radio",
-    "Text input",
-    "Pager (live)",
-    "Indicators",
-    "Position",
-    "Tabs",
-    "Status bar",
-    "Help",
-    "Dialog",
-    "Form",
-    "Layout",
-    "Exit",
-];
-const LIST_ITEMS: &[&str] = &[
-    "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet",
-    "Kilo", "Lima", "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo",
-];
-const TREE_ITEMS: &[TreeItem] = &[
-    TreeItem::new("project", 0),
-    TreeItem::new("src", 1),
-    TreeItem::new("main", 2),
-    TreeItem::new("lib", 2),
-    TreeItem::new("docs", 1),
-    TreeItem::new("guide", 2),
-    TreeItem::new("readme", 1),
-];
-const TABLE_ROWS: [[&str; 3]; 5] = [
-    ["Bolt", "12", "3"],
-    ["Nut", "34", "1"],
-    ["Washer", "90", "1"],
-    ["Screw", "75", "4"],
-    ["Rivet", "21", "2"],
-];
-const TABLE_W: [u16; 3] = [150, 60, 48];
-const TABLE_HEADERS: &[&str] = &["Name", "Qty", "Pri"];
-const MODES: &[&str] = &["Eco", "Balanced", "Turbo"];
-const RADIO_OPTS: &[&str] = &["Low", "Medium", "High"];
-const TABS_TITLES: &[&str] = &["Main", "Net", "Info"];
-const TAB_CONTENT: [[&str; 2]; 3] = [["Alpha", "Bravo"], ["Gamma", "Delta"], ["Echo", "Foxtrot"]];
-const HELP_ITEMS: &[(&str, &str)] = &[
-    ("Turn", "Move / scroll the cursor"),
-    ("Push", "Select, or edit a value"),
-    ("Back", "A focusable menu item"),
-    ("Exit", "Leave the demo (root)"),
-    ("Edit", "Push to edit, push to commit"),
-];
-const DIALOG_BTNS: &[&str] = &["OK", "Cancel"];
-const POS_ROWS: &[&str] = &[
-    "Row 1", "Row 2", "Row 3", "Row 4", "Row 5", "Row 6", "Row 7", "Row 8", "Row 9", "Row 10",
-    "Row 11", "Row 12",
-];
-
-/// 0..=100 triangle wave for the live indicators / bar chart.
-fn triangle(phase: u32, offset: u32) -> u16 {
-    let v = ((phase + offset) / 2) % 200;
-    (if v < 100 { v } else { 200 - v }) as u16
-}
-
-// ── Streaming log (realtime Pager) ─────────────────────────────────────────────
-
-/// A capped ring buffer of recent lines - a stand-in for a live UART log. Uses
-/// interior mutability so the app can append (`&self`) while the `Pager` borrows
-/// it, and overrides `write_line` so it never hands out a borrow of its buffer.
+/// A capped ring buffer of recent lines - a stand-in for a live UART. Interior
+/// mutability so the frame loop can append (`&self`) while the Pager screen
+/// borrows it, and `write_line` so it never hands out a borrow of its buffer.
 struct StreamLog {
     lines: RefCell<Vec<String>>,
     cap: usize,
 }
+
 impl StreamLog {
     fn new(cap: usize) -> Self {
         Self {
@@ -125,6 +47,7 @@ impl StreamLog {
             cap,
         }
     }
+
     fn push(&self, line: String) {
         let mut v = self.lines.borrow_mut();
         v.push(line);
@@ -134,12 +57,13 @@ impl StreamLog {
         }
     }
 }
+
 impl LinesModel for StreamLog {
     fn line_count(&self) -> usize {
         self.lines.borrow().len()
     }
     fn get_line(&self, _i: usize) -> &str {
-        "" // unused: the Pager renders via write_line
+        "" // unused: the Pager renders through write_line
     }
     fn write_line(&self, i: usize, out: &mut dyn core::fmt::Write) {
         if let Some(s) = self.lines.borrow().get(i) {
@@ -148,751 +72,12 @@ impl LinesModel for StreamLog {
     }
 }
 
-// ── Scrollable row stack (Text & Indicators pages) ─────────────────────────────
-
-enum Row {
-    Text(&'static str, Style),
-    TitleC(&'static str),
-    TitleR(&'static str),
-    Sep,
-    Spacer,
-    Spin,
-    Bar(u16),
-    Gauge(u16),
-}
-
-/// Draws a vertical row stack scrolled by `scroll`, with a `Scrollbar` on
-/// overflow. Clears its own `area` first (it is assembled from transient pieces).
-fn draw_stack(
-    target: &mut dyn RenderTarget,
-    area: Area,
-    scroll: usize,
-    rows: &[Row],
-    spinner: &Spinner,
-) {
-    if area.w == 0 || area.h == 0 {
-        return;
-    }
-    target.clear(area);
-    let lh = target.line_height().max(1);
-    let visible = (area.h / lh) as usize;
-    let overflow = rows.len() > visible && area.w > 4;
-    let w = if overflow { area.w - 4 } else { area.w };
-
-    for r in 0..visible {
-        let i = scroll + r;
-        if i >= rows.len() {
-            break;
-        }
-        let a = Area::new(area.x, area.y + r as u16 * lh, w, lh);
-        match &rows[i] {
-            Row::Text(s, st) => Label::new(s).with_style(*st).view(target, a),
-            Row::TitleC(s) => Title::new(s).with_align(Align::Center).view(target, a),
-            Row::TitleR(s) => Title::new(s).with_align(Align::Right).view(target, a),
-            Row::Sep => Separator::new().view(target, a),
-            Row::Spacer => {}
-            Row::Spin => spinner.view(target, a),
-            Row::Bar(v) => {
-                let mut pb = ProgressBar::new().with_max(100);
-                pb.set_value(*v);
-                pb.view(target, a);
-            }
-            Row::Gauge(v) => {
-                let mut g = LineGauge::new().with_max(100);
-                g.set_value(*v);
-                g.view(target, a);
-            }
-        }
-    }
-
-    if overflow {
-        let mut sb = Scrollbar::new();
-        sb.set(rows.len(), visible, scroll);
-        sb.view(target, Area::new(area.x + area.w - 3, area.y, 3, area.h));
-    }
-}
-
-// ── Pages ──────────────────────────────────────────────────────────────────────
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Page {
-    Menu,
-    Text,
-    ListP,
-    TreeP,
-    TableP,
-    BarChartP,
-    Toggles,
-    Editors,
-    RadioP,
-    TextInputP,
-    PagerP,
-    Indicators,
-    Position,
-    TabsP,
-    StatusBarP,
-    HelpP,
-    DialogP,
-    FormP,
-    Layout,
-}
-
-fn page_for(i: usize) -> Option<Page> {
-    use Page::*;
-    [
-        Text, ListP, TreeP, TableP, BarChartP, Toggles, Editors, RadioP, TextInputP, PagerP,
-        Indicators, Position, TabsP, StatusBarP, HelpP, DialogP, FormP, Layout,
-    ]
-    .get(i)
-    .copied()
-}
-
-fn title_for(p: Page) -> &'static str {
-    use Page::*;
-    match p {
-        Menu => "knurl TFT catalog",
-        Text => "Text & styles",
-        ListP => "List",
-        TreeP => "Tree",
-        TableP => "Table",
-        BarChartP => "Bar chart",
-        Toggles => "Toggles",
-        Editors => "Value editors",
-        RadioP => "Radio",
-        TextInputP => "Text input",
-        PagerP => "Pager (live stream)",
-        Indicators => "Indicators",
-        Position => "Position",
-        TabsP => "Tabs",
-        StatusBarP => "Status bar",
-        HelpP => "Help",
-        DialogP => "Dialog",
-        FormP => "Form",
-        Layout => "Layout",
-    }
-}
-
-fn hint_for(p: Page) -> &'static str {
-    use Page::*;
-    match p {
-        Menu => "Turn: move   Push: open",
-        Toggles | Editors | FormP | TextInputP => "Push: edit / activate Back",
-        TreeP => "Push: expand / Back",
-        TabsP => "Push: next tab / Back",
-        DialogP => "Push: a button / Back",
-        PagerP => "Turn: scroll, bottom = follow",
-        _ => "Turn: move   Push: Back",
-    }
-}
-
-fn animated(p: Page) -> bool {
-    matches!(p, Page::BarChartP | Page::Indicators)
-}
-
-/// Field count of the pages built on a [`Form`] (`0` = not a form page). The
-/// `< Back` button is always the **last** field, which is how an `Activated`
-/// coming out of the form is told apart from one raised by a field.
-fn form_len(p: Page) -> usize {
-    match p {
-        Page::Toggles | Page::FormP => 3,
-        Page::Editors => 4,
-        Page::TextInputP => 2,
-        _ => 0,
-    }
-}
-
-// ── App-side focus zones ───────────────────────────────────────────────────────
-
-/// The row-stack and Position pages scroll a window over rows they draw by
-/// hand, so there is no widget to put on the chain - this is the zone for them.
-///
-/// It is the whole contract: spend an event while the window can still move,
-/// hand it back at either end. The chain does the rest, and "`Down` at the
-/// bottom lands on `< Back`" needs no code here at all.
-struct ScrollZone<'a> {
-    offset: &'a mut usize,
-    max: usize,
-}
-
-impl FocusZone for ScrollZone<'_> {
-    fn handle(&mut self, msg: &Msg) -> Outcome {
-        match msg {
-            Msg::Up if *self.offset > 0 => {
-                *self.offset -= 1;
-                Outcome::Consumed
-            }
-            Msg::Down if *self.offset < self.max => {
-                *self.offset += 1;
-                Outcome::Consumed
-            }
-            _ => Outcome::Ignored,
-        }
-    }
-}
-
-/// The Tabs page shows static text, so the page behind the strip is a zone the
-/// focus can never enter: `Select` on the strip reports `Ignored` and nothing
-/// opens - which is [`TabPages`]' contract for a tab with nothing to focus.
-struct StaticPage;
-
-impl FocusZone for StaticPage {
-    fn handle(&mut self, _msg: &Msg) -> Outcome {
-        Outcome::Ignored
-    }
-    fn is_focusable(&self) -> bool {
-        false
-    }
-}
-
-struct Demo {
-    router: Router<Page, 4>,
-    chain: FocusChain,
-    tab_pages: TabPages,
-    title: Title<'static>,
-    menu: List<'static>,
-
-    scroll: usize,
-    vis: Cell<usize>,
-
-    list: List<'static>,
-    tree: Tree<'static>,
-    table: Table<'static, [[&'static str; 3]; 5]>,
-    radio: Radio<'static>,
-    help: Help<'static>,
-    dialog: Dialog<'static>,
-    tabs: Tabs<'static>,
-
-    form: Form,
-    back: Button<'static>,
-    chk: Checkbox<'static>,
-    tog: Toggle<'static>,
-    counter: Counter<'static>,
-    slider: Slider<'static>,
-    picker: Picker<'static>,
-    fan: Toggle<'static>,
-    level: Counter<'static>,
-    input: TextInput<'static, 16>,
-
-    pos_offset: usize,
-    spinner: Spinner,
-    phase: u32,
-    chan: [u16; 4],
-    gauge_v: u16,
-
-    force: bool,
-    repaint: bool,
-    quit: bool,
-}
-
-impl Demo {
-    fn new() -> Self {
-        let mut d = Self {
-            router: Router::new(Page::Menu),
-            chain: FocusChain::new(),
-            tab_pages: TabPages::new(),
-            title: Title::new(title_for(Page::Menu)).with_align(Align::Center),
-            menu: List::new(MENU),
-            scroll: 0,
-            vis: Cell::new(8),
-            list: List::new(LIST_ITEMS),
-            tree: Tree::new(TREE_ITEMS),
-            table: Table::new(&TABLE_ROWS, &TABLE_W).with_headers(TABLE_HEADERS),
-            radio: Radio::new(RADIO_OPTS),
-            help: Help::new(HELP_ITEMS).with_key_width(60),
-            dialog: Dialog::new("Save changes?", "Apply the new settings?", DIALOG_BTNS),
-            tabs: Tabs::new(TABS_TITLES),
-            form: Form::new(),
-            back: Button::new("< Back"),
-            chk: Checkbox::new("Logging"),
-            tog: Toggle::new("Wi-Fi").with_on(true),
-            counter: Counter::new("Brightness")
-                .with_range(0, 100)
-                .with_step(10)
-                .with_value(60),
-            slider: Slider::new("Volume")
-                .with_range(0, 100)
-                .with_step(10)
-                .with_value(40)
-                .with_label_width(72),
-            picker: Picker::new("Mode", MODES),
-            fan: Toggle::new("Fan"),
-            level: Counter::new("Level").with_range(0, 5).with_value(2),
-            input: TextInput::new("Name").with_label_width(54),
-            pos_offset: 0,
-            spinner: Spinner::new().with_label("streaming"),
-            phase: 0,
-            chan: [0; 4],
-            gauge_v: 0,
-            force: true,
-            repaint: true,
-            quit: false,
-        };
-        d.menu.focus();
-        d
-    }
-
-    fn page(&self) -> Page {
-        self.router.current()
-    }
-
-    /// The page's focus zones, in reading order, built for the length of one
-    /// call - the same array serves routing, focus placement and invalidation,
-    /// so a page describes its focus order exactly once.
-    ///
-    /// **`< Back` is always the last zone** (or, on a form page, the last
-    /// field): that is the demo's whole navigation convention, and the only
-    /// thing [`Demo::handle`] needs to know about a page. `pager` is threaded in
-    /// because the streaming Pager lives in `main`, not in `Demo`.
-    fn with_zones<R>(
-        &mut self,
-        pager: &mut Pager<'_, StreamLog>,
-        f: impl FnOnce(&mut FocusChain, &mut [&mut dyn FocusZone]) -> R,
-    ) -> R {
-        let page = self.router.current();
-        let vis = self.vis.get().max(1);
-        let Self {
-            chain,
-            tab_pages,
-            menu,
-            scroll,
-            list,
-            tree,
-            table,
-            radio,
-            help,
-            dialog,
-            tabs,
-            form,
-            back,
-            chk,
-            tog,
-            counter,
-            slider,
-            picker,
-            fan,
-            level,
-            input,
-            pos_offset,
-            ..
-        } = self;
-
-        match page {
-            Page::Menu => f(chain, &mut [menu]),
-
-            // Form pages: Back is the form's last field, so the whole form is
-            // one zone on the chain.
-            Page::Toggles => {
-                let mut fields: [&mut dyn FormField; 3] = [chk, tog, back];
-                let mut zone = form.zone(&mut fields);
-                f(chain, &mut [&mut zone])
-            }
-            Page::Editors => {
-                let mut fields: [&mut dyn FormField; 4] = [counter, slider, picker, back];
-                let mut zone = form.zone(&mut fields);
-                f(chain, &mut [&mut zone])
-            }
-            Page::TextInputP => {
-                let mut fields: [&mut dyn FormField; 2] = [input, back];
-                let mut zone = form.zone(&mut fields);
-                f(chain, &mut [&mut zone])
-            }
-            Page::FormP => {
-                let mut fields: [&mut dyn FormField; 3] = [fan, level, back];
-                let mut zone = form.zone(&mut fields);
-                f(chain, &mut [&mut zone])
-            }
-
-            // Widget pages: the widget, then Back.
-            Page::ListP => f(chain, &mut [list, back]),
-            Page::TreeP => f(chain, &mut [tree, back]),
-            Page::TableP => f(chain, &mut [table, back]),
-            Page::RadioP => f(chain, &mut [radio, back]),
-            Page::HelpP => f(chain, &mut [help, back]),
-            Page::DialogP => f(chain, &mut [dialog, back]),
-            // The live stream: scrolling it detaches follow, exactly as before.
-            Page::PagerP => f(chain, &mut [pager, back]),
-
-            // Hand-drawn scrolling pages: the app's own zone, then Back.
-            Page::Text => f(
-                chain,
-                &mut [
-                    &mut ScrollZone {
-                        offset: scroll,
-                        max: 9usize.saturating_sub(vis),
-                    },
-                    back,
-                ],
-            ),
-            Page::Indicators => f(
-                chain,
-                &mut [
-                    &mut ScrollZone {
-                        offset: scroll,
-                        max: 6usize.saturating_sub(vis),
-                    },
-                    back,
-                ],
-            ),
-            Page::Position => f(
-                chain,
-                &mut [
-                    &mut ScrollZone {
-                        offset: pos_offset,
-                        max: POS_ROWS.len().saturating_sub(vis),
-                    },
-                    back,
-                ],
-            ),
-
-            // The tab strip and its (static) page are one zone; Back below it.
-            Page::TabsP => {
-                let mut page = StaticPage;
-                let mut zone = tab_pages.zone(tabs, &mut page);
-                f(chain, &mut [&mut zone, back])
-            }
-
-            // Static pages: Back is all there is.
-            Page::BarChartP | Page::StatusBarP | Page::Layout => f(chain, &mut [back]),
-        }
-    }
-
-    /// Enters `page`: reset transient state, place the focus on the page's first
-    /// zone, mark everything on it dirty, and force a clean full redraw.
-    fn on_enter(&mut self, page: Page, pager: &mut Pager<'_, StreamLog>) {
-        self.scroll = 0;
-        self.force = true;
-        self.repaint = true;
-        self.title.set_text(title_for(page));
-        match page {
-            Page::Indicators => self.spinner.mark_dirty(), // drawn inside the stack
-            Page::TextInputP => self.input.reset(),
-            Page::TabsP => self.tabs.set_selected(0),
-            _ => {}
-        }
-        if form_len(page) > 0 {
-            self.form = Form::new();
-        }
-        // `focus_zone` rather than `sync_focus`: the zone set changed under the
-        // chain (a different page), and only an explicit placement re-enters.
-        self.with_zones(pager, |chain, z| {
-            chain.focus_zone(0, Entry::Top, z);
-            chain.mark_dirty(z);
-        });
-    }
-
-    fn push(&mut self, page: Page, pager: &mut Pager<'_, StreamLog>) {
-        self.router.push(page);
-        self.on_enter(page, pager);
-    }
-
-    fn pop(&mut self, pager: &mut Pager<'_, StreamLog>) {
-        self.router.pop();
-        self.on_enter(self.page(), pager);
-    }
-
-    fn tick(&mut self) {
-        self.phase = self.phase.wrapping_add(1);
-        self.gauge_v = triangle(self.phase, 0);
-        for (i, c) in self.chan.iter_mut().enumerate() {
-            *c = triangle(self.phase, i as u32 * 23);
-        }
-        if self.page() == Page::Indicators {
-            let _ = self.spinner.update(&Msg::Tick);
-        }
-        if animated(self.page()) {
-            self.repaint = true;
-        }
-    }
-
-    /// Handles one message. `pager` is the realtime streaming Pager (a local in
-    /// `main`, borrowing the `StreamLog`); the Pager page puts it on the chain.
-    fn handle(&mut self, msg: &Msg, pager: &mut Pager<'_, StreamLog>) {
-        if matches!(msg, Msg::Tick) {
-            self.tick();
-            if self.page() == Page::PagerP {
-                let _ = pager.update(&Msg::Tick); // follow re-pins to the new tail
-                self.repaint = true;
-            }
-            return;
-        }
-        self.repaint = true;
-
-        // One line of routing for every page: the chain walks the focus between
-        // the page's zones, and only what it hands back is the app's business.
-        let (outcome, zones) = self.with_zones(pager, |chain, z| (chain.update(msg, z), z.len()));
-        if outcome != Outcome::Activated {
-            // Consumed: the page used it. Ignored: the cursor is at the edge of
-            // the screen - on encoder hardware that is simply the end of the
-            // road, since leaving a page is the `< Back` item's job.
-            return;
-        }
-
-        match self.page() {
-            // The root menu has no Back: a row opens a page, the last one exits.
-            Page::Menu => match page_for(self.menu.selected()) {
-                Some(p) => self.push(p, pager),
-                None => self.quit = true,
-            },
-            // Either dialog button closes the modal (which one is the app's to
-            // read via `selected_button`; this demo does not care).
-            Page::DialogP if !self.back_activated(zones) => self.pop(pager),
-            // Everywhere else the only thing that activates is `< Back`.
-            _ if self.back_activated(zones) => self.pop(pager),
-            _ => {}
-        }
-    }
-
-    /// Whether the `Activated` just seen came from the page's `< Back` item.
-    ///
-    /// `Outcome` says *that* something was activated, not *what*: the focus
-    /// index is what says which. Two levels answer it - the chain for a page's
-    /// zones, the form for a form page's fields.
-    fn back_activated(&self, zones: usize) -> bool {
-        match form_len(self.page()) {
-            0 => self.chain.focus_index() + 1 == zones,
-            fields => self.form.focus_index() + 1 == fields,
-        }
-    }
-
-    // ── render ───────────────────────────────────────────────────────────────
-
-    fn view(&self, target: &mut dyn RenderTarget, pager: &Pager<'_, StreamLog>) {
-        let w = target.width();
-        let h = target.height();
-        let lh = target.line_height().max(1);
-        if w == 0 || h < lh * 3 {
-            return;
-        }
-
-        if self.force {
-            target.clear(Area::new(0, 0, w, h));
-        }
-
-        let [head, mid, foot] = VStack::split(
-            Area::new(0, 0, w, h),
-            &[Length(lh + 2), Fill(1), Length(lh + 2)],
-        );
-        self.title
-            .view(target, Area::new(head.x, head.y + 1, head.w, lh));
-
-        // The status-bar hint is chrome: it only needs repainting on a transition
-        // (otherwise it persists), which keeps idle/animation frames partial.
-        if self.force {
-            StatusBar::new()
-                .with_left(hint_for(self.page()))
-                .with_right("knurl")
-                .view(target, foot);
-        }
-
-        let body = Area::new(4, mid.y, mid.w.saturating_sub(8), mid.h);
-        self.view_body(target, body, pager);
-    }
-
-    fn view_body(&self, target: &mut dyn RenderTarget, body: Area, pager: &Pager<'_, StreamLog>) {
-        let lh = target.line_height().max(1);
-        match self.page() {
-            Page::Menu => self.menu.view(target, body),
-
-            Page::Toggles => {
-                let f: [&dyn FormField; 3] = [&self.chk, &self.tog, &self.back];
-                self.form.view(target, body, &f);
-            }
-            Page::Editors => {
-                let f: [&dyn FormField; 4] =
-                    [&self.counter, &self.slider, &self.picker, &self.back];
-                self.form.view(target, body, &f);
-            }
-            Page::TextInputP => {
-                let f: [&dyn FormField; 2] = [&self.input, &self.back];
-                self.form.view(target, body, &f);
-            }
-            Page::FormP => {
-                let f: [&dyn FormField; 3] = [&self.fan, &self.level, &self.back];
-                self.form.view(target, body, &f);
-            }
-
-            Page::ListP => self.body_with_back(target, body, |s, t, a| s.list.view(t, a)),
-            Page::TreeP => self.body_with_back(target, body, |s, t, a| s.tree.view(t, a)),
-            Page::TableP => self.body_with_back(target, body, |s, t, a| s.table.view(t, a)),
-            Page::RadioP => self.body_with_back(target, body, |s, t, a| s.radio.view(t, a)),
-            Page::HelpP => self.body_with_back(target, body, |s, t, a| s.help.view(t, a)),
-            Page::DialogP => self.body_with_back(target, body, |s, t, a| s.dialog.view(t, a)),
-
-            Page::PagerP => {
-                let [top, back] = VStack::split(body, &[Fill(1), Length(lh)]);
-                pager.view(target, top);
-                self.draw_back(target, back);
-            }
-
-            Page::BarChartP => self.body_with_back(target, body, |s, t, a| {
-                let data = [
-                    ("Cpu", s.chan[0]),
-                    ("Mem", s.chan[1]),
-                    ("Net", s.chan[2]),
-                    ("Disk", s.chan[3]),
-                ];
-                BarChart::new(&data)
-                    .with_label_width(48)
-                    .with_max(100)
-                    .view(t, a);
-            }),
-
-            Page::TabsP => self.body_with_back(target, body, |s, t, a| s.view_tabs(t, a)),
-            Page::StatusBarP => self.body_with_back(target, body, |_s, t, a| {
-                let lh = t.line_height();
-                let row = Area::new(a.x, a.y, a.w, lh);
-                StatusBar::new()
-                    .with_left("Left")
-                    .with_center("Center")
-                    .with_right("Right")
-                    .view(t, row);
-                Label::new("StatusBar: left / center / right")
-                    .with_style(Style::Muted)
-                    .view(t, Area::new(a.x, a.y + lh * 2, a.w, lh));
-            }),
-            Page::Layout => self.body_with_back(target, body, |s, t, a| s.view_layout(t, a)),
-            Page::Position => self.body_with_back(target, body, |s, t, a| s.view_position(t, a)),
-
-            Page::Text => {
-                let [stack, back] = VStack::split(body, &[Fill(1), Length(lh)]);
-                self.vis.set((stack.h / lh) as usize);
-                draw_stack(target, stack, self.scroll, &self.rows_text(), &self.spinner);
-                self.draw_back(target, back);
-            }
-            Page::Indicators => {
-                let [stack, back] = VStack::split(body, &[Fill(1), Length(lh)]);
-                self.vis.set((stack.h / lh) as usize);
-                draw_stack(
-                    target,
-                    stack,
-                    self.scroll,
-                    &self.rows_indicators(),
-                    &self.spinner,
-                );
-                self.draw_back(target, back);
-            }
-        }
-    }
-
-    fn body_with_back(
-        &self,
-        target: &mut dyn RenderTarget,
-        body: Area,
-        draw: impl FnOnce(&Self, &mut dyn RenderTarget, Area),
-    ) {
-        let lh = target.line_height().max(1);
-        let [top, back] = VStack::split(body, &[Fill(1), Length(lh)]);
-        draw(self, target, top);
-        self.draw_back(target, back);
-    }
-
-    /// The `< Back` item is the real [`Button`] the chain is focusing, so it
-    /// draws itself in the focus language - no page-side state to mirror.
-    fn draw_back(&self, target: &mut dyn RenderTarget, area: Area) {
-        self.back.view(target, area);
-    }
-
-    fn view_tabs(&self, target: &mut dyn RenderTarget, area: Area) {
-        let lh = target.line_height().max(1);
-        self.tabs
-            .view(target, Area::new(area.x, area.y, area.w, lh));
-        let tab = self.tabs.selected().min(2);
-        for (i, item) in TAB_CONTENT[tab].iter().enumerate() {
-            let y = area.y + lh * 2 + i as u16 * lh;
-            Label::new(item)
-                .with_style(Style::Normal)
-                .view(target, Area::new(area.x, y, area.w, lh));
-        }
-    }
-
-    fn view_layout(&self, target: &mut dyn RenderTarget, area: Area) {
-        let lh = target.line_height().max(1);
-        let [top, mid, bot] = VStack::split(area, &[Length(lh), Fill(1), Length(lh)]);
-        Label::new("VStack: top row")
-            .with_style(Style::Accent)
-            .view(target, top);
-        let [l, r] = HStack::split(mid, &[Fill(1), Fill(1)]);
-        target.draw_box(l, BorderStyle::Rounded);
-        target.draw_box(r, BorderStyle::Rounded);
-        Padded::new(Label::new("Left pane"), Padding::uniform(4)).view(target, l);
-        Padded::new(Label::new("Right pane"), Padding::uniform(4)).view(target, r);
-        Label::new("HStack + Bordered + Padded")
-            .with_style(Style::Accent)
-            .view(target, bot);
-    }
-
-    fn view_position(&self, target: &mut dyn RenderTarget, area: Area) {
-        let lh = target.line_height().max(1);
-        let [rows_area, pag_row] = VStack::split(area, &[Fill(1), Length(lh)]);
-        let visible = ((rows_area.h / lh) as usize).clamp(1, POS_ROWS.len());
-        self.vis.set(visible);
-        for r in 0..visible {
-            let idx = self.pos_offset + r;
-            if idx >= POS_ROWS.len() {
-                break;
-            }
-            let style = if r == 0 { Style::Focus } else { Style::Muted };
-            Label::new(POS_ROWS[idx]).with_style(style).view(
-                target,
-                Area::new(
-                    rows_area.x,
-                    rows_area.y + r as u16 * lh,
-                    rows_area.w.saturating_sub(4),
-                    lh,
-                ),
-            );
-        }
-        let mut sb = Scrollbar::new();
-        sb.set(POS_ROWS.len(), visible, self.pos_offset);
-        sb.view(
-            target,
-            Area::new(
-                rows_area.x + rows_area.w - 3,
-                rows_area.y,
-                3,
-                visible as u16 * lh,
-            ),
-        );
-        let pages = POS_ROWS.len() - visible + 1;
-        Paginator::new(pages)
-            .with_current(self.pos_offset)
-            .view(target, pag_row);
-    }
-
-    fn rows_text(&self) -> [Row; 9] {
-        [
-            Row::Text("Normal text", Style::Normal),
-            Row::Text("Accent text", Style::Accent),
-            Row::Text("Muted text", Style::Muted),
-            Row::Text("Danger text", Style::Danger),
-            Row::Sep,
-            Row::TitleC("Centered title"),
-            Row::TitleR("Right title"),
-            Row::Spacer,
-            Row::Text("(spacer above)", Style::Muted),
-        ]
-    }
-
-    fn rows_indicators(&self) -> [Row; 6] {
-        [
-            Row::Spin,
-            Row::Text("ProgressBar", Style::Muted),
-            Row::Bar(self.chan[0]),
-            Row::Text("LineGauge", Style::Muted),
-            Row::Gauge(self.gauge_v),
-            Row::Text("live values", Style::Muted),
-        ]
-    }
-}
-
 fn main() {
     let mut sim = ColorSimulator::new(ColorSimConfig {
-        title: "knurl TFT - 320x240 catalog (Up/Down, Space)".to_string(),
+        title: "knurl TFT - 320x240 (Up/Down, Space)".to_string(),
         ..Default::default()
     });
 
-    // The streaming log + its Pager live here (not in Demo) so the Pager can
-    // borrow the log without a self-referential struct - mirrors pager_stream.rs.
     let log = StreamLog::new(256);
     let mut ticks = 0u32;
     let mut count = 0u32;
@@ -900,12 +85,15 @@ fn main() {
         count += 1;
         log.push(format!("[{count:03}] sensor = {}", (count * 37) % 1000));
     }
-    let mut pager = Pager::new(&log).with_follow(true);
 
-    let mut demo = Demo::new();
+    let mut app = App::new(Panel::LARGE, &log).with_log_follow(true);
+    let mut title = Title::new(app.title()).with_align(Align::Center);
+    let mut shown = app.page();
+    let mut repaint = true;
+    let mut chrome = true; // the hint bar only changes with the screen
 
-    // Non-move closure: `pager` borrows `&log`; the body also appends to `log`
-    // (`&self`) - both are shared borrows, so they coexist alongside `&mut demo`.
+    // Non-move closure: `app` borrows `&log` and the body appends to it
+    // (`&self`) - both shared borrows, so they coexist.
     sim.run_gated(|target, msgs| {
         for msg in msgs {
             if let Msg::Tick = msg {
@@ -914,17 +102,43 @@ fn main() {
                     count += 1;
                     log.push(format!("[{count:03}] sensor = {}", (count * 37) % 1000));
                 }
+                repaint |= app.tick();
+                continue;
             }
-            demo.handle(msg, &mut pager);
+            repaint = true;
+            app.update(msg);
         }
-        if demo.quit {
+        if app.quit() {
             return Frame::Quit;
         }
-        if !core::mem::take(&mut demo.repaint) {
+        if !core::mem::take(&mut repaint) {
             return Frame::Skipped;
         }
-        demo.view(target, &pager);
-        demo.force = false;
+
+        if app.page() != shown {
+            shown = app.page();
+            title.set_text(app.title());
+            chrome = true;
+        }
+
+        let (w, h) = (target.width(), target.height());
+        let lh = target.line_height().max(1);
+        if w == 0 || h < lh * 3 {
+            return Frame::Skipped;
+        }
+        let [head, mid, foot] = VStack::split(
+            Area::new(0, 0, w, h),
+            &[Length(lh + 2), Fill(1), Length(lh + 2)],
+        );
+        title.view(target, Area::new(head.x, head.y + 1, head.w, lh));
+        // The hint is chrome: repainting it every frame would undo the gate.
+        if core::mem::take(&mut chrome) {
+            StatusBar::new()
+                .with_left(app.hint())
+                .with_right("knurl")
+                .view(target, foot);
+        }
+        app.view(target, Area::new(4, mid.y, mid.w.saturating_sub(8), mid.h));
         Frame::Painted
     });
 }

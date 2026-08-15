@@ -3,7 +3,7 @@
 //! ## Architectural note
 //!
 //! This module deliberately does **not** define a new
-//! [`RenderTarget`](knurl_core::RenderTarget). It wraps the existing renderers:
+//! [`RenderTarget`](knurl::RenderTarget). It wraps the existing renderers:
 //!
 //! ```text
 //! SimulatorDisplay<BinaryColor>  →  GraphicsTarget        →  same screen code as hardware
@@ -25,8 +25,8 @@ use embedded_graphics::{
 use embedded_graphics_simulator::{
     OutputSettingsBuilder, SimulatorDisplay, SimulatorEvent, Window,
 };
-use knurl_core::{Msg, RenderTarget, Style};
-use knurl_graphics::{ColorGraphicsTarget, ColorTheme, GraphicsTarget, Theme};
+use knurl::graphics::{ColorGraphicsTarget, ColorTheme, GraphicsTarget, Theme};
+use knurl::{Msg, RenderTarget, Style};
 
 use crate::keymap::Keymap;
 
@@ -56,7 +56,7 @@ pub enum Flow {
 /// [`ColorSimulator::run_gated`]).
 ///
 /// The gated loop performs **no global screen clear** - each widget clears its
-/// own area inside its [`view`](knurl_core::Component::view) (partial redraw).
+/// own area inside its [`view`](knurl::Component::view) (partial redraw).
 /// The callback owns the Elm cycle and, after processing the frame's
 /// messages, returns:
 ///
@@ -477,7 +477,7 @@ fn make_window(title: &str, scale: u32) -> Window {
 /// A live SDL2 simulator window over a monochrome [`SimulatorDisplay`].
 ///
 /// Renders through the unchanged [`GraphicsTarget`], so any
-/// [`Component`](knurl_core::Component) runs exactly as on a physical panel.
+/// [`Component`](knurl::Component) runs exactly as on a physical panel.
 pub struct Simulator {
     core: Core,
     backend: MonoBackend,
@@ -543,7 +543,7 @@ impl Simulator {
     /// [`Frame::Skipped`]; otherwise call each widget's `c.view(..)` (each
     /// self-gates and clears its own area) and return [`Frame::Painted`] (or
     /// [`Frame::Quit`]). On a structural transition (nav / modal close) the app
-    /// clears the affected region and calls [`mark_dirty`](knurl_core::Component::mark_dirty)
+    /// clears the affected region and calls [`mark_dirty`](knurl::Component::mark_dirty)
     /// so it repaints cleanly. A skipped frame issues no draw ops - on hardware,
     /// nothing over SPI.
     pub fn run_gated<F>(&mut self, on_frame: F)
@@ -558,7 +558,7 @@ impl Simulator {
 
 /// A live SDL2 simulator window over a colour [`SimulatorDisplay`] ([`Rgb565`]).
 ///
-/// Renders the *same* [`Component`](knurl_core::Component) screens as
+/// Renders the *same* [`Component`](knurl::Component) screens as
 /// [`Simulator`], through [`ColorGraphicsTarget`] + [`ColorTheme`]. Defaults to
 /// a 320×240 ST7789-class panel.
 pub struct ColorSimulator {
