@@ -113,6 +113,101 @@ impl<T: Component + ?Sized> FocusZone for T {
     }
 }
 
+// ── Zones a screen cannot express with a widget ──────────────────────────────
+
+/// A zone the focus never enters: it handles nothing and refuses the cursor.
+///
+/// Screens that draw something by hand still have to name it in their zone
+/// list - a static page behind a tab strip, a decorative pane between two
+/// widgets - and a placeholder is otherwise per-application boilerplate. Used
+/// as a tab's page it is also the canonical "tab that does not open":
+/// [`TabPages`](crate::TabPages) reports `Select` on it `Ignored`.
+///
+/// ```
+/// use knurl_core::{Button, FocusChain, FocusZone, Msg, NoZone};
+///
+/// let mut page = NoZone;
+/// let mut back = Button::new("< Back");
+/// let mut chain = FocusChain::new();
+/// let mut zones: [&mut dyn FocusZone; 2] = [&mut page, &mut back];
+///
+/// chain.sync_focus(&mut zones);
+/// assert_eq!(chain.focus_index(), 1, "the cursor went straight to the button");
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoZone;
+
+impl FocusZone for NoZone {
+    fn handle(&mut self, _msg: &Msg) -> Outcome {
+        Outcome::Ignored
+    }
+
+    fn is_focusable(&self) -> bool {
+        false
+    }
+}
+
+/// A window scrolled over content the screen draws itself: `Up`/`Down` move
+/// `offset` within `0..=max`, and either end hands the event back so the chain
+/// can move on.
+///
+/// A hand-drawn page (a stack of rows, a canvas) has no widget to put on the
+/// chain, only an offset - this is that offset as a zone. Built per event batch
+/// like [`Form::zone`], because it borrows the screen's own field:
+///
+/// ```
+/// use knurl_core::{Button, FocusChain, FocusZone, Msg, Outcome, ScrollZone};
+///
+/// let mut offset = 0usize;
+/// let mut back = Button::new("< Back");
+/// let mut chain = FocusChain::new();
+/// {
+///     let mut rows = ScrollZone::new(&mut offset, 1);
+///     let mut zones: [&mut dyn FocusZone; 2] = [&mut rows, &mut back];
+///     chain.sync_focus(&mut zones);
+///     assert_eq!(chain.update(&Msg::Down, &mut zones), Outcome::Consumed); // scrolled
+///     assert_eq!(chain.update(&Msg::Down, &mut zones), Outcome::Consumed); // onto Back
+/// }
+/// assert_eq!(offset, 1, "the window stopped at its end");
+/// ```
+pub struct ScrollZone<'a> {
+    offset: &'a mut usize,
+    max: usize,
+}
+
+impl<'a> ScrollZone<'a> {
+    /// A window over `offset`, which may run from `0` to `max` inclusive.
+    /// Callers usually pass `rows - visible` (saturating) as `max`.
+    ///
+    /// The offset is clamped into the range on construction: `max` is computed
+    /// from how much fits on screen, so it shrinks when the screen grows or the
+    /// content changes, and a window left past the new end would otherwise be
+    /// stuck there (`Down` is already at the end, `Up` walks back one row at a
+    /// time).
+    pub fn new(offset: &'a mut usize, max: usize) -> Self {
+        if *offset > max {
+            *offset = max;
+        }
+        Self { offset, max }
+    }
+}
+
+impl FocusZone for ScrollZone<'_> {
+    fn handle(&mut self, msg: &Msg) -> Outcome {
+        match msg {
+            Msg::Up if *self.offset > 0 => {
+                *self.offset -= 1;
+                Outcome::Consumed
+            }
+            Msg::Down if *self.offset < self.max => {
+                *self.offset += 1;
+                Outcome::Consumed
+            }
+            _ => Outcome::Ignored,
+        }
+    }
+}
+
 // ── FocusChain ───────────────────────────────────────────────────────────────
 
 /// The screen's focus manager: an ordered set of [`FocusZone`]s, one of which
@@ -614,8 +709,9 @@ mod tests {
         );
     }
 
-    /// What `zone_nav` does by hand in the demos today: run off the end of a
-    /// list and the focus lands on the button below it.
+    /// The shape every screen is built from: run off the end of a list and the
+    /// focus lands on the button below it. (Applications used to hand-roll this
+    /// walk - `zone_nav` in the demos - which is what the chain replaced.)
     #[test]
     fn a_plain_widget_hands_the_focus_on_at_its_edge() {
         const ITEMS: &[&str] = &["Alpha", "Beta"];
@@ -923,6 +1019,60 @@ mod tests {
         for msg in [Msg::Up, Msg::Down, Msg::Select, Msg::Down] {
             assert_eq!(chain.update(&msg, &mut zones), Outcome::Ignored);
         }
+    }
+
+    // ── NoZone / ScrollZone ─────────────────────────────────────────────────
+
+    /// A `NoZone` is never a stop and never eats an event, whichever end of the
+    /// chain it sits at.
+    #[test]
+    fn a_no_zone_is_stepped_over_from_both_sides() {
+        let mut head = NoZone;
+        let mut go = Button::new("Go");
+        let mut tail = NoZone;
+        let mut chain = FocusChain::new();
+        let mut zones: [&mut dyn FocusZone; 3] = [&mut head, &mut go, &mut tail];
+
+        chain.sync_focus(&mut zones);
+        assert_eq!(chain.focus_index(), 1, "landed on the only real zone");
+        assert_eq!(chain.update(&Msg::Down, &mut zones), Outcome::Ignored);
+        assert_eq!(chain.update(&Msg::Up, &mut zones), Outcome::Ignored);
+        assert_eq!(chain.focus_index(), 1);
+    }
+
+    /// The hand-drawn page: the window scrolls while it can and hands the event
+    /// on at its ends, so "`Down` at the bottom lands on `< Back`" is chain
+    /// behaviour, not page code.
+    #[test]
+    fn a_scroll_zone_moves_its_window_and_lets_go_at_the_ends() {
+        let mut offset = 0usize;
+        let mut back = Button::new("< Back");
+        let mut chain = FocusChain::new();
+
+        {
+            let mut rows = ScrollZone::new(&mut offset, 2);
+            let mut zones: [&mut dyn FocusZone; 2] = [&mut rows, &mut back];
+            chain.sync_focus(&mut zones);
+            assert_eq!(chain.update(&Msg::Up, &mut zones), Outcome::Ignored, "top");
+            for _ in 0..2 {
+                assert_eq!(chain.update(&Msg::Down, &mut zones), Outcome::Consumed);
+            }
+            assert_eq!(chain.focus_index(), 0, "still scrolling");
+            // The window is at its end: the next Down is the chain's.
+            assert_eq!(chain.update(&Msg::Down, &mut zones), Outcome::Consumed);
+            assert_eq!(chain.focus_index(), 1);
+        }
+        assert_eq!(offset, 2);
+    }
+
+    /// A window left past the end of shorter content is pulled back in, or the
+    /// user would be stranded: `Down` is already at the end and `Up` only walks
+    /// back one row per click.
+    #[test]
+    fn a_scroll_zone_clamps_a_window_that_outlived_its_content() {
+        let mut offset = 9usize;
+        let _ = ScrollZone::new(&mut offset, 3);
+        assert_eq!(offset, 3);
     }
 
     #[test]
