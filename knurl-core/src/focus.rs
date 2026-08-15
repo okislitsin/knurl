@@ -287,12 +287,14 @@ impl FocusZone for FormZone<'_, '_> {
     }
 
     fn leave(&mut self) {
+        // Edit mode must never linger on a zone the focus has left. (The chain
+        // will not leave a form mid-edit - that is what traps_focus is for -
+        // but a hand-rolled caller might.) It goes through the form rather than
+        // through the fields, or `traps_focus()` would keep reporting an edit
+        // that no field is in.
+        self.form.cancel_edit(self.fields);
         for f in self.fields.iter_mut() {
             f.blur();
-            // Edit mode must never linger on a zone the focus has left. (The
-            // chain will not leave a form mid-edit - that is what traps_focus is
-            // for - but a hand-rolled caller might.)
-            f.set_editing(false);
         }
     }
 
@@ -507,6 +509,28 @@ mod tests {
         for msg in [Msg::Up, Msg::Down, Msg::Select] {
             assert_eq!(chain.update(&msg, &mut none), Outcome::Ignored);
         }
+    }
+
+    /// `leave()` cleared the fields' edit flags but not the form's, so the zone
+    /// went on reporting an edit that no field was in - and a zone that traps
+    /// the focus with nothing to show for it is a screen the user cannot leave.
+    /// The chain itself never gets here (it will not walk out of a trapping
+    /// zone), but a hand-rolled screen calling `leave()` does.
+    #[test]
+    fn leaving_a_form_zone_by_hand_ends_the_edit_on_both_sides() {
+        let mut counter = Counter::new("N").with_range(0, 9).with_value(1);
+        let mut fields: [&mut dyn FormField; 1] = [&mut counter];
+        let mut form = Form::new();
+
+        {
+            let mut zone = form.zone(&mut fields);
+            assert_eq!(zone.handle(&Msg::Select), Outcome::Consumed);
+            assert!(zone.traps_focus(), "editing - the zone holds the focus");
+
+            zone.leave();
+            assert!(!zone.traps_focus(), "the zone still claims an edit");
+        }
+        assert!(!form.is_editing(), "the form still thinks it is editing");
     }
 
     #[test]
