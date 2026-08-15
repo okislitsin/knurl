@@ -106,6 +106,24 @@ impl Form {
         }
     }
 
+    /// Places the focus on field `idx` (clamped to the field set), leaves any
+    /// edit mode, and syncs focus/blur across the fields.
+    ///
+    /// `Form` moves its own focus one step at a time; this is the way to place
+    /// it from **outside**, which is what an enclosing focus container needs:
+    /// entering a form from below must land on its *last* field, or one `Up`
+    /// would immediately throw the focus back out and the form would read as
+    /// skipped. See [`FocusZone::enter`](crate::FocusZone::enter).
+    pub fn focus_field(&mut self, idx: usize, fields: &mut [&mut dyn FormField]) {
+        if fields.is_empty() {
+            return;
+        }
+        self.focus = idx.min(fields.len() - 1);
+        // Arriving somewhere new is never arriving mid-edit.
+        self.editing = false;
+        self.sync_focus(fields);
+    }
+
     /// Routes one event through the form and reports its [`Outcome`].
     ///
     /// This is the existing focus container, so it is also the first place the
