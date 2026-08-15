@@ -486,6 +486,32 @@ pub(crate) fn draw_v_scroll(
     );
 }
 
+// ── Focus language ───────────────────────────────────────────────────────────
+
+/// Draws the focus band under a widget's cursor row and returns the style the
+/// row's own content must be drawn in.
+///
+/// This is the whole focus language, in one place:
+///
+/// - **focused** - `row` is filled with a [`Style::Focus`] band and everything on
+///   it (marker, indicator, label, value) is drawn `Focus` too, so the row reads
+///   as one solid block rather than a highlight around the label alone;
+/// - **not focused** - no band. The row is drawn [`Style::Normal`] against the
+///   `Muted` rows around it: the user still sees where they left the cursor,
+///   without the widget claiming to be the one the encoder is driving.
+///
+/// `row` is the widget's row **as laid out** - the area it was given, minus any
+/// column reserved for the scroll indicator ([`V_SCROLL_RESERVE`]), never the
+/// width of the text on it.
+pub(crate) fn draw_cursor_band(target: &mut dyn RenderTarget, row: Area, focused: bool) -> Style {
+    if focused {
+        target.fill_band(row, Style::Focus);
+        Style::Focus
+    } else {
+        Style::Normal
+    }
+}
+
 /// An isolated, composable UI element following the Elm update/view cycle.
 ///
 /// ## Partial redraw
