@@ -145,7 +145,17 @@ impl<'a> Component for Dialog<'a> {
             if x >= right {
                 break;
             }
-            let label = truncate(b, ((right - x) / cw) as usize);
+            // The cell is `cw` of padding, the label, then `cw` of padding, so
+            // the label budget is what remains after *both* - a budget measured
+            // against the bare `right - x` would push the text one cell past
+            // `inner`. Nothing left for a character means nothing left for a
+            // readable button, so the row ends here rather than drawing an empty
+            // frame.
+            let budget = ((right - x).saturating_sub(2 * cw) / cw) as usize;
+            if budget == 0 {
+                break;
+            }
+            let label = truncate(b, budget);
             let cell_w = target.text_width(label) + 2 * cw;
             let focused = i == self.selected;
             if focused {
@@ -275,6 +285,33 @@ mod tests {
         let mut t2 = RecordingTarget::new(128, 64);
         d2.view(&mut t2, Area::new(0, 0, 120, 22));
         assert!(texts(&t2).iter().any(|(_, y, s, _)| *y == 11 && s == "Yes"));
+    }
+
+    /// A button label is laid out as `cw` padding + text + `cw` padding, so its
+    /// budget must come off both - otherwise the text runs one cell past the
+    /// inner box. Nothing may be drawn beyond `inner`'s right edge.
+    #[test]
+    fn dialog_button_text_stays_inside_the_inner_box() {
+        const CW: u16 = 6; // RecordingTarget char_width
+        // Long labels matter: they get truncated to the budget, so a budget that
+        // ignores the padding shows up as text running past the edge.
+        const LONG: &[&str] = &["Cancel", "Retry"];
+        for btns in [BTNS, LONG] {
+            for w in [4u16, 8, 12, 14, 20, 26, 30, 32, 40, 64, 120] {
+                let d = Dialog::new("Confirm", "Sure?", btns);
+                let mut t = RecordingTarget::new(128, 64);
+                d.view(&mut t, Area::new(0, 0, w, 40));
+                // Rounded border, thickness 1 → inner spans x = 1 ..= w - 2.
+                let right = w - 1;
+                for (x, _, s, _) in texts(&t) {
+                    let end = x + CW * s.chars().count() as u16;
+                    assert!(
+                        end <= right,
+                        "text {s:?} ends at {end} past inner right {right} (w = {w})"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
