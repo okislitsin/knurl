@@ -36,7 +36,7 @@ pub use radio::Radio;
 pub use router::{Nav, Router};
 pub use statusbar::StatusBar;
 pub use table::{Table, TableModel};
-pub use tabs::Tabs;
+pub use tabs::{TabPages, TabZone, Tabs};
 pub use textinput::TextInput;
 pub use tree::{Tree, TreeItem, TreeModel};
 
