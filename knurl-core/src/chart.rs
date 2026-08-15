@@ -126,6 +126,11 @@ impl<'a, M: BarChartModel + ?Sized> Component for BarChart<'a, M> {
         Outcome::Ignored
     }
 
+    fn focusable(&self) -> bool {
+        // Static: it can never use an event, so the cursor does not stop here.
+        false
+    }
+
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
         let line_h = target.line_height().max(1);
         let cw = target.char_width().max(1);
