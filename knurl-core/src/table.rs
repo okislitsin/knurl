@@ -73,6 +73,9 @@ pub struct Table<'a, M: TableModel + ?Sized> {
     offset: usize,
     focused: bool,
     page_size: Cell<usize>,
+    // Repaint gate: set when the selection, the scroll offset or focus changes,
+    // cleared after a paint. Starts dirty so the first frame always draws.
+    dirty: Cell<bool>,
 }
 
 impl<'a, M: TableModel + ?Sized> Table<'a, M> {
@@ -87,6 +90,7 @@ impl<'a, M: TableModel + ?Sized> Table<'a, M> {
             offset: 0,
             focused: false,
             page_size: Cell::new(usize::MAX),
+            dirty: Cell::new(true),
         }
     }
 
@@ -154,13 +158,17 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
                 if self.selected >= self.offset + page {
                     self.offset = self.selected + 1 - page;
                 }
+                self.dirty.set(true);
             }
             Msg::Up if self.selected > 0 => {
                 self.selected -= 1;
                 if self.selected < self.offset {
                     self.offset = self.selected;
                 }
+                self.dirty.set(true);
             }
+            // Everything else - Select, a clamped end, a tick - changes no
+            // pixel, so the gate stays clean and an idle frame skips the table.
             _ => {}
         }
     }
@@ -240,10 +248,24 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
 
     fn focus(&mut self) {
         self.focused = true;
+        self.dirty.set(true); // focus decides whether the cursor row bands
     }
 
     fn blur(&mut self) {
         self.focused = false;
+        self.dirty.set(true);
+    }
+
+    fn dirty(&self) -> bool {
+        self.dirty.get()
+    }
+
+    fn mark_clean(&self) {
+        self.dirty.set(false);
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.set(true);
     }
 }
 
@@ -454,5 +476,49 @@ mod tests {
         table.view(&mut t, Area::new(0, 0, 80, 50));
         assert!(texts(&t).iter().any(|(_, _, s, _)| s == "r0c0"));
         assert!(texts(&t).iter().any(|(x, _, s, _)| *x == 42 && s == "r1c1"));
+    }
+
+    // ── Dirty gate ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn table_dirty_gate() {
+        let mut table = Table::new(ROWS, WIDTHS);
+        assert!(table.dirty(), "a fresh widget paints its first frame");
+        table.mark_clean();
+
+        // Nothing that changes no state may dirty it.
+        table.update(&Msg::Select);
+        table.update(&Msg::Tick);
+        table.update(&Msg::Up); // already on the first row
+        assert!(!table.dirty());
+
+        table.update(&Msg::Down);
+        assert!(table.dirty());
+        table.mark_clean();
+
+        // Focus changes the picture now, so it must dirty too.
+        table.focus();
+        assert!(table.dirty());
+        table.mark_clean();
+        table.blur();
+        assert!(table.dirty());
+        table.mark_clean();
+        table.mark_dirty();
+        assert!(table.dirty());
+    }
+
+    /// The gate is what lets an idle frame skip the widget entirely.
+    #[test]
+    fn table_clean_view_draws_nothing() {
+        let mut table = Table::new(ROWS, WIDTHS);
+        let area = Area::new(0, 0, 80, 50);
+        let mut t0 = RecordingTarget::new(80, 50);
+        table.view(&mut t0, area);
+        assert!(!t0.ops().is_empty());
+
+        table.update(&Msg::Select); // no-op
+        let mut t1 = RecordingTarget::new(80, 50);
+        table.view(&mut t1, area);
+        assert!(t1.ops().is_empty());
     }
 }
