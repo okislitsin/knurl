@@ -94,17 +94,20 @@ impl<'a> Component for Dialog<'a> {
     }
 
     /// Draws the box, then title / message / button row - each row only if the
-    /// inner box is tall enough for it, the title having priority:
+    /// inner box is tall enough for it:
     ///
-    /// | Inner height        | Drawn                    |
-    /// |---------------------|--------------------------|
-    /// | `< line_height`     | box + (clipped) title    |
-    /// | `< 2 * line_height` | box + title              |
-    /// | `>= 2 * line_height`| box + title + message + buttons |
+    /// | Inner height         | Drawn                                 |
+    /// |----------------------|---------------------------------------|
+    /// | `< line_height`      | box + (clipped) title                 |
+    /// | `< 2 * line_height`  | box + title                           |
+    /// | `< 3 * line_height`  | box + title + buttons                 |
+    /// | `>= 3 * line_height` | box + title + message + buttons       |
     ///
-    /// The message and the button row share the same threshold: below two rows
-    /// the last row *is* the title row, so drawing buttons there would overwrite
-    /// the title - the title wins.
+    /// Every row has its own threshold because they occupy fixed positions -
+    /// title first, message second, buttons last - and a shorter box makes them
+    /// collide. Under two rows the last row *is* the title row, so the title
+    /// wins; under three the button row *is* the message row, and the buttons
+    /// win there because they are what the user acts on.
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
         target.draw_box(area, self.border);
         let Some(inner) = area.inner_by(self.border.thickness()) else {
@@ -122,8 +125,9 @@ impl<'a> Component for Dialog<'a> {
             Style::Accent,
         );
 
-        // Message (Normal) on the second row, if there's room.
-        if inner.h >= 2 * line_h {
+        // Message (Normal) on the second row, if there's room for it *and* the
+        // button row below it (see the note on `draw`).
+        if inner.h >= 3 * line_h {
             target.draw_text(
                 inner.x,
                 inner.y + line_h,
@@ -285,6 +289,30 @@ mod tests {
         let mut t2 = RecordingTarget::new(128, 64);
         d2.view(&mut t2, Area::new(0, 0, 120, 22));
         assert!(texts(&t2).iter().any(|(_, y, s, _)| *y == 11 && s == "Yes"));
+    }
+
+    /// At exactly two rows the message row *is* the button row, so the message
+    /// stands down; from three rows up both are drawn, on rows of their own.
+    #[test]
+    fn dialog_message_yields_to_the_button_row_at_two_rows() {
+        // inner.h = 20 = 2 rows: title y=1, buttons y=11, no message.
+        let d = Dialog::new("Confirm", "Sure?", BTNS);
+        let mut t = RecordingTarget::new(128, 64);
+        d.view(&mut t, Area::new(0, 0, 120, 22));
+        let tx = texts(&t);
+        assert!(
+            !tx.iter().any(|(_, _, s, _)| s == "Sure?"),
+            "the message shares the button row"
+        );
+        assert!(tx.iter().any(|(_, y, s, _)| *y == 11 && s == "Yes"));
+
+        // inner.h = 30 = 3 rows: title y=1, message y=11, buttons y=21.
+        let d2 = Dialog::new("Confirm", "Sure?", BTNS);
+        let mut t2 = RecordingTarget::new(128, 64);
+        d2.view(&mut t2, Area::new(0, 0, 120, 32));
+        let tx2 = texts(&t2);
+        assert!(tx2.iter().any(|(_, y, s, _)| *y == 11 && s == "Sure?"));
+        assert!(tx2.iter().any(|(_, y, s, _)| *y == 21 && s == "Yes"));
     }
 
     /// A button label is laid out as `cw` padding + text + `cw` padding, so its
