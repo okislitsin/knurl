@@ -358,7 +358,7 @@ impl Form {
     /// [`mark_dirty`](Component::mark_dirty)s every field before drawing - so
     /// they repaint through their own contract rather than behind its back.
     /// An unchanged form still draws nothing at all.
-    pub fn view(&self, target: &mut dyn RenderTarget, area: Area, fields: &[&dyn FormField]) {
+    pub fn view(&self, target: &mut dyn RenderTarget, area: Area, fields: &[&mut dyn FormField]) {
         if area.w == 0 || area.h == 0 {
             return;
         }
@@ -463,7 +463,7 @@ impl Form {
         &self,
         stamp: LayoutStamp,
         target: &mut dyn RenderTarget,
-        fields: &[&dyn FormField],
+        fields: &[&mut dyn FormField],
     ) {
         if self.stamp.get() == Some(stamp) {
             return;
@@ -720,12 +720,12 @@ mod tests {
 
     #[test]
     fn form_view_lays_fields_on_pixel_rows() {
-        let a = Checkbox::new("A");
-        let b = Checkbox::new("B");
+        let mut a = Checkbox::new("A");
+        let mut b = Checkbox::new("B");
         let form = Form::new();
         // line_height = 10 (default RecordingTarget metric).
         let mut t = RecordingTarget::new(120, 30);
-        let fields: [&dyn FormField; 2] = [&a, &b];
+        let fields: [&mut dyn FormField; 2] = [&mut a, &mut b];
         form.view(&mut t, Area::new(0, 0, 120, 30), &fields);
         // Each Checkbox draws its "[ ]" indicator at the row origin: y = 0 and 10.
         let ys: alloc::vec::Vec<u16> = t
@@ -742,12 +742,12 @@ mod tests {
     #[test]
     fn form_view_stacks_fields_by_reported_height() {
         // Heights 10 / 20 / 10 → tops at 0, 10, 30.
-        let a = Probe::new("A", 10);
-        let b = Probe::new("B", 20);
-        let c = Probe::new("C", 10);
+        let mut a = Probe::new("A", 10);
+        let mut b = Probe::new("B", 20);
+        let mut c = Probe::new("C", 10);
         let form = Form::new();
         let mut t = RecordingTarget::new(120, 100);
-        let fields: [&dyn FormField; 3] = [&a, &b, &c];
+        let fields: [&mut dyn FormField; 3] = [&mut a, &mut b, &mut c];
         form.view(&mut t, Area::new(0, 0, 120, 100), &fields);
         assert_eq!(tag_y(&t, "A"), Some(0));
         assert_eq!(tag_y(&t, "B"), Some(10));
@@ -759,14 +759,14 @@ mod tests {
         // The TextInput sits first; the Probe below it must shift down by a row
         // when the TextInput enters edit (1 row → 2 rows). Default focus (0) is
         // the TextInput, so the editing TextInput stays fully visible either way.
-        let ti = TextInput::<8>::new("N");
-        let probe = Probe::new("P", 10);
+        let mut ti = TextInput::<8>::new("N");
+        let mut probe = Probe::new("P", 10);
         let form = Form::new();
 
         // Not editing: TextInput is one row (10), Probe at y = 10.
         let mut t0 = RecordingTarget::new(120, 100);
         {
-            let fields: [&dyn FormField; 2] = [&ti, &probe];
+            let fields: [&mut dyn FormField; 2] = [&mut ti, &mut probe];
             form.view(&mut t0, Area::new(0, 0, 120, 100), &fields);
         }
         assert_eq!(tag_y(&t0, "P"), Some(10));
@@ -776,7 +776,7 @@ mod tests {
         editing.set_editing(true);
         let mut t1 = RecordingTarget::new(120, 100);
         {
-            let fields: [&dyn FormField; 2] = [&editing, &probe];
+            let fields: [&mut dyn FormField; 2] = [&mut editing, &mut probe];
             form.view(&mut t1, Area::new(0, 0, 120, 100), &fields);
         }
         assert_eq!(tag_y(&t1, "P"), Some(20));
@@ -786,11 +786,11 @@ mod tests {
     fn form_scrolls_to_keep_focused_field_visible() {
         // 5 fields × 10px = 50px stack in a 30px area (3 rows). Focus the last;
         // the stack must scroll so the focused field (top 40) is fully visible.
-        let a = Probe::new("A", 10);
-        let b = Probe::new("B", 10);
-        let c = Probe::new("C", 10);
-        let d = Probe::new("D", 10);
-        let e = Probe::new("E", 10);
+        let mut a = Probe::new("A", 10);
+        let mut b = Probe::new("B", 10);
+        let mut c = Probe::new("C", 10);
+        let mut d = Probe::new("D", 10);
+        let mut e = Probe::new("E", 10);
         let mut form = Form::new();
         {
             let mut m: [&mut dyn FormField; 5] = [
@@ -808,7 +808,7 @@ mod tests {
         assert_eq!(form.focus_index(), 4);
 
         let mut t = RecordingTarget::new(120, 30);
-        let fields: [&dyn FormField; 5] = [&a, &b, &c, &d, &e];
+        let fields: [&mut dyn FormField; 5] = [&mut a, &mut b, &mut c, &mut d, &mut e];
         form.view(&mut t, Area::new(0, 0, 120, 30), &fields);
 
         // scroll = 50 - 30 = 20 → C/D/E visible at y = 0/10/20; A/B clipped out.
@@ -842,12 +842,12 @@ mod tests {
     /// overflow every height tried here, so the indicator path always runs.
     #[test]
     fn form_tiny_area_draws_nothing_outside_and_never_panics() {
-        let a = Probe::new("A", 10);
-        let b = Probe::new("B", 10);
-        let c = Probe::new("C", 10);
-        let d = Probe::new("D", 10);
-        let e = Probe::new("E", 10);
-        let fields: [&dyn FormField; 5] = [&a, &b, &c, &d, &e];
+        let mut a = Probe::new("A", 10);
+        let mut b = Probe::new("B", 10);
+        let mut c = Probe::new("C", 10);
+        let mut d = Probe::new("D", 10);
+        let mut e = Probe::new("E", 10);
+        let fields: [&mut dyn FormField; 5] = [&mut a, &mut b, &mut c, &mut d, &mut e];
         let form = Form::new();
 
         for w in [0u16, 1, 2, 3, 4, 5, 12] {
@@ -1159,19 +1159,19 @@ mod tests {
     #[test]
     fn form_repaints_the_whole_area_when_the_field_set_shrinks() {
         let area = Area::new(0, 0, 120, 60);
-        let picker = Gated::new("P", 10);
-        let (r, g, b) = (
+        let mut picker = Gated::new("P", 10);
+        let (mut r, mut g, mut b) = (
             Gated::new("R", 10),
             Gated::new("G", 10),
             Gated::new("B", 10),
         );
-        let back = Gated::new("K", 10);
+        let mut back = Gated::new("K", 10);
         let form = Form::new();
 
         // Frame 1: the full set, everything dirty, "back" lands on row 4.
         let mut t1 = RecordingTarget::new(120, 60);
         {
-            let fields: [&dyn FormField; 5] = [&picker, &r, &g, &b, &back];
+            let fields: [&mut dyn FormField; 5] = [&mut picker, &mut r, &mut g, &mut b, &mut back];
             form.view(&mut t1, area, &fields);
         }
         assert_eq!(tag_y(&t1, "K"), Some(40));
@@ -1180,7 +1180,7 @@ mod tests {
         // without the re-layout check nothing is drawn at all.
         let mut t2 = RecordingTarget::new(120, 60);
         {
-            let fields: [&dyn FormField; 2] = [&picker, &back];
+            let fields: [&mut dyn FormField; 2] = [&mut picker, &mut back];
             form.view(&mut t2, area, &fields);
         }
         assert!(drew_anything(&t2), "the shrunk frame drew nothing");
@@ -1195,7 +1195,7 @@ mod tests {
         // frame repaints the screen and the dirty gate is worthless.
         let mut t3 = RecordingTarget::new(120, 60);
         {
-            let fields: [&dyn FormField; 2] = [&picker, &back];
+            let fields: [&mut dyn FormField; 2] = [&mut picker, &mut back];
             form.view(&mut t3, area, &fields);
         }
         assert!(!drew_anything(&t3), "a settled form must draw nothing");
@@ -1208,25 +1208,31 @@ mod tests {
     #[test]
     fn form_repaints_when_a_field_changes_its_own_height() {
         let area = Area::new(0, 0, 120, 60);
-        let grower = Gated::new("T", 10);
-        let below = Gated::new("Z", 10);
+        let mut grower = Gated::new("T", 10);
+        let mut below = Gated::new("Z", 10);
         let form = Form::new();
-        let fields: [&dyn FormField; 2] = [&grower, &below];
+        // The array is rebuilt per frame - exactly as a screen does it, and the
+        // only way to reach into `grower` between frames.
+        macro_rules! frame {
+            () => {{
+                let fields: [&mut dyn FormField; 2] = [&mut grower, &mut below];
+                let mut t = RecordingTarget::new(120, 60);
+                form.view(&mut t, area, &fields);
+                t
+            }};
+        }
 
-        let mut t1 = RecordingTarget::new(120, 60);
-        form.view(&mut t1, area, &fields);
+        let t1 = frame!();
         assert_eq!(tag_y(&t1, "Z"), Some(10));
 
         // Grow: 1 row → 2 rows. "below" is clean but must move to y = 20.
         grower.h.set(20);
-        let mut t2 = RecordingTarget::new(120, 60);
-        form.view(&mut t2, area, &fields);
+        let t2 = frame!();
         assert_eq!(tag_y(&t2, "Z"), Some(20), "clean field did not follow");
 
         // Shrink back: the row the grower gave up must be cleared.
         grower.h.set(10);
-        let mut t3 = RecordingTarget::new(120, 60);
-        form.view(&mut t3, area, &fields);
+        let t3 = frame!();
         assert!(
             cleared_whole(&t3, area),
             "the freed row keeps a ghost of the second line"
@@ -1239,15 +1245,15 @@ mod tests {
     #[test]
     fn form_repaints_when_only_the_scroll_offset_moves() {
         let area = Area::new(0, 0, 120, 30); // 3 rows for a 5-row stack
-        let a = Gated::new("A", 10);
-        let b = Gated::new("B", 10);
-        let c = Gated::new("C", 10);
-        let d = Gated::new("D", 10);
-        let e = Gated::new("E", 10);
+        let mut a = Gated::new("A", 10);
+        let mut b = Gated::new("B", 10);
+        let mut c = Gated::new("C", 10);
+        let mut d = Gated::new("D", 10);
+        let mut e = Gated::new("E", 10);
         let mut form = Form::new();
 
         {
-            let fields: [&dyn FormField; 5] = [&a, &b, &c, &d, &e];
+            let fields: [&mut dyn FormField; 5] = [&mut a, &mut b, &mut c, &mut d, &mut e];
             let mut t = RecordingTarget::new(120, 30);
             form.view(&mut t, area, &fields);
             assert_eq!(tag_y(&t, "A"), Some(0));
@@ -1265,7 +1271,7 @@ mod tests {
                 let _ = form.update(&Msg::Down, &mut m);
             }
         }
-        let fields: [&dyn FormField; 5] = [&a, &b, &c, &d, &e];
+        let fields: [&mut dyn FormField; 5] = [&mut a, &mut b, &mut c, &mut d, &mut e];
         let mut t = RecordingTarget::new(120, 30);
         form.view(&mut t, area, &fields);
         assert_eq!(
@@ -1283,26 +1289,37 @@ mod tests {
     #[test]
     fn form_survives_a_picker_driven_field_set() {
         let area = Area::new(0, 0, 120, 60);
-        let mode = Gated::new("M", 10);
-        let (r, g, b) = (
+        let mut mode = Gated::new("M", 10);
+        let (mut r, mut g, mut b) = (
             Gated::new("R", 10),
             Gated::new("G", 10),
             Gated::new("B", 10),
         );
-        let speed = Gated::new("S", 10);
+        let mut speed = Gated::new("S", 10);
         let mut form = Form::new();
 
-        // Off → RGB → Rainbow → Off, redrawing between each switch.
-        let sets: [&[&dyn FormField]; 4] =
-            [&[&mode], &[&mode, &r, &g, &b], &[&mode, &speed], &[&mode]];
-        for (i, fields) in sets.iter().enumerate() {
-            let mut t = RecordingTarget::new(120, 60);
-            form.view(&mut t, area, fields);
+        // Off → RGB → Rainbow → Off, redrawing between each switch. The set is
+        // built fresh per frame, the way a screen builds it from its own fields.
+        for i in 0..4 {
+            let draw = |form: &Form,
+                        mode: &mut Gated,
+                        r: &mut Gated,
+                        g: &mut Gated,
+                        b: &mut Gated,
+                        speed: &mut Gated| {
+                let mut t = RecordingTarget::new(120, 60);
+                match i {
+                    1 => form.view(&mut t, area, &[mode, r, g, b]),
+                    2 => form.view(&mut t, area, &[mode, speed]),
+                    _ => form.view(&mut t, area, &[mode]),
+                }
+                t
+            };
+            let t = draw(&form, &mut mode, &mut r, &mut g, &mut b, &mut speed);
             assert!(cleared_whole(&t, area), "set {i} did not repaint the form");
             assert_eq!(tag_y(&t, "M"), Some(0), "set {i}: picker missing");
             // A second frame with the same set stays quiet.
-            let mut again = RecordingTarget::new(120, 60);
-            form.view(&mut again, area, fields);
+            let again = draw(&form, &mut mode, &mut r, &mut g, &mut b, &mut speed);
             assert!(!drew_anything(&again), "set {i} repainted twice");
 
             // The picker keeps the focus across the switch.
