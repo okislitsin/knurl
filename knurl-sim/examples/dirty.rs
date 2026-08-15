@@ -50,7 +50,7 @@ fn main() {
         frames += 1;
         for msg in msgs {
             if dialog_open {
-                dialog.update(msg);
+                let _ = dialog.update(msg);
                 if dialog.is_confirmed() {
                     dialog.reset();
                     dialog_open = false;
@@ -60,8 +60,8 @@ fn main() {
                 dialog_open = true;
                 dialog.mark_dirty(); // ensure the modal paints when it opens
             } else {
-                list.update(msg);
-                spinner.update(msg);
+                let _ = list.update(msg);
+                let _ = spinner.update(msg);
             }
         }
 

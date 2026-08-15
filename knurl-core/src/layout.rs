@@ -1,4 +1,4 @@
-use crate::{Area, BorderStyle, Component, Msg, Padding, RenderTarget};
+use crate::{Area, BorderStyle, Component, Msg, Outcome, Padding, RenderTarget};
 
 // ── Constraint ──────────────────────────────────────────────────────────────
 
@@ -124,8 +124,9 @@ impl<C> Padded<C> {
 }
 
 impl<C: Component> Component for Padded<C> {
-    fn update(&mut self, msg: &Msg) {
-        self.child.update(msg);
+    // Pure chrome: the child's verdict on the event is the wrapper's verdict.
+    fn update(&mut self, msg: &Msg) -> Outcome {
+        self.child.update(msg)
     }
 
     // Container: dispatch to the child (which self-gates and clears its own
@@ -187,8 +188,9 @@ impl<C> Bordered<C> {
 }
 
 impl<C: Component> Component for Bordered<C> {
-    fn update(&mut self, msg: &Msg) {
-        self.child.update(msg);
+    // Pure chrome: the child's verdict on the event is the wrapper's verdict.
+    fn update(&mut self, msg: &Msg) -> Outcome {
+        self.child.update(msg)
     }
 
     // Container: redraw the border chrome only when dirty (its pixels persist
@@ -373,7 +375,28 @@ mod tests {
     #[test]
     fn wrapper_forwards_update() {
         let mut b = Bordered::new(List::new(&["A", "B", "C"]), BorderStyle::Single);
-        b.update(&Msg::Down);
+        let _ = b.update(&Msg::Down);
         assert_eq!(b.child().selected(), 1);
+    }
+
+    // ── Outcome (event routing) ─────────────────────────────────────────────
+
+    /// Chrome routes nothing of its own: whatever the child says, the wrapper
+    /// says - including an `Activated` the app is waiting for.
+    #[test]
+    fn padded_and_bordered_report_exactly_what_the_child_did() {
+        const ITEMS: &[&str] = &["a", "b"];
+
+        let mut padded = Padded::new(List::new(ITEMS), Padding::uniform(2));
+        assert_eq!(padded.update(&Msg::Up), Outcome::Ignored);
+        assert_eq!(padded.update(&Msg::Down), Outcome::Consumed);
+        assert_eq!(padded.update(&Msg::Down), Outcome::Ignored);
+        assert_eq!(padded.update(&Msg::Select), Outcome::Activated);
+
+        let mut bordered = Bordered::new(List::new(ITEMS), BorderStyle::Single);
+        assert_eq!(bordered.update(&Msg::Up), Outcome::Ignored);
+        assert_eq!(bordered.update(&Msg::Down), Outcome::Consumed);
+        assert_eq!(bordered.update(&Msg::Down), Outcome::Ignored);
+        assert_eq!(bordered.update(&Msg::Select), Outcome::Activated);
     }
 }

@@ -1,4 +1,4 @@
-use crate::{Area, Component, Msg, RenderTarget, Style};
+use crate::{Area, Component, Msg, Outcome, RenderTarget, Style};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -68,12 +68,20 @@ impl<'a> Tabs<'a> {
 }
 
 impl<'a> Component for Tabs<'a> {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
+        // Switching tab uses the event; the first/last tab is an edge, so the
+        // container gets the event back and can move focus off the strip.
+        let before = self.selected;
         match msg {
             // Encoder rotation switches tabs; Left/Right kept for keyboards.
             Msg::Down | Msg::Right => self.next(),
             Msg::Up | Msg::Left => self.prev(),
-            _ => {}
+            _ => return Outcome::Ignored,
+        }
+        if self.selected != before {
+            Outcome::Consumed
+        } else {
+            Outcome::Ignored
         }
     }
 
@@ -163,10 +171,10 @@ mod tests {
     #[test]
     fn tabs_next_prev_and_encoder() {
         let mut tabs = Tabs::new(T);
-        tabs.update(&Msg::Right);
+        let _ = tabs.update(&Msg::Right);
         assert_eq!(tabs.selected(), 1);
         assert_eq!(tabs.selected_title(), "Two");
-        tabs.update(&Msg::Up);
+        let _ = tabs.update(&Msg::Up);
         assert_eq!(tabs.selected(), 0);
     }
 
@@ -190,6 +198,33 @@ mod tests {
             fills(&t)
                 .iter()
                 .any(|(a, st)| a.h == 2 && a.x == 26 && *st == Style::Accent)
+        );
+    }
+
+    // ── Outcome (event routing) ─────────────────────────────────────────────
+
+    #[test]
+    fn tabs_spend_a_switch_and_hand_back_an_edge() {
+        let mut tabs = Tabs::new(T);
+        assert_eq!(
+            tabs.update(&Msg::Up),
+            Outcome::Ignored,
+            "already on the first tab"
+        );
+        assert_eq!(
+            tabs.update(&Msg::Down),
+            Outcome::Consumed,
+            "switched to the next"
+        );
+        assert_eq!(
+            tabs.update(&Msg::Down),
+            Outcome::Ignored,
+            "already on the last tab"
+        );
+        assert_eq!(
+            tabs.update(&Msg::Select),
+            Outcome::Ignored,
+            "the strip does not pick"
         );
     }
 }

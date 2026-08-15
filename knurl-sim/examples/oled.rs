@@ -402,7 +402,7 @@ impl Demo {
             *c = triangle(self.phase, i as u32 * 23);
         }
         if self.page() == Page::Indicators {
-            self.spinner.update(&Msg::Tick);
+            let _ = self.spinner.update(&Msg::Tick);
         }
         if animated(self.page()) {
             self.repaint = true;
@@ -425,7 +425,9 @@ impl Demo {
                     Some(p) => self.push(p),
                     None => self.quit = true,
                 },
-                _ => self.menu.update(msg),
+                _ => {
+                    let _ = self.menu.update(msg);
+                }
             },
 
             // Form pages: the Back is a focusable Button field inside the form.
@@ -433,7 +435,7 @@ impl Demo {
                 {
                     let mut f: [&mut dyn FormField; 3] =
                         [&mut self.chk, &mut self.tog, &mut self.back];
-                    self.form.update(msg, &mut f);
+                    let _ = self.form.update(msg, &mut f);
                 }
                 self.pop_if_back();
             }
@@ -445,14 +447,14 @@ impl Demo {
                         &mut self.picker,
                         &mut self.back,
                     ];
-                    self.form.update(msg, &mut f);
+                    let _ = self.form.update(msg, &mut f);
                 }
                 self.pop_if_back();
             }
             Page::TextInputP => {
                 {
                     let mut f: [&mut dyn FormField; 2] = [&mut self.input, &mut self.back];
-                    self.form.update(msg, &mut f);
+                    let _ = self.form.update(msg, &mut f);
                 }
                 self.pop_if_back();
             }
@@ -460,7 +462,7 @@ impl Demo {
                 {
                     let mut f: [&mut dyn FormField; 3] =
                         [&mut self.fan, &mut self.level, &mut self.back];
-                    self.form.update(msg, &mut f);
+                    let _ = self.form.update(msg, &mut f);
                 }
                 self.pop_if_back();
             }
@@ -471,10 +473,12 @@ impl Demo {
                 if self.zone_nav(
                     msg,
                     before,
-                    |s| s.list.update(&Msg::Down),
+                    |s| {
+                        let _ = s.list.update(&Msg::Down);
+                    },
                     |s| s.list.selected(),
                 ) {
-                    self.list.update(&Msg::Up);
+                    let _ = self.list.update(&Msg::Up);
                 }
             }
             Page::TreeP => {
@@ -482,13 +486,15 @@ impl Demo {
                 if self.zone_nav(
                     msg,
                     before,
-                    |s| s.tree.update(&Msg::Down),
+                    |s| {
+                        let _ = s.tree.update(&Msg::Down);
+                    },
                     |s| s.tree.selected(),
                 ) {
-                    self.tree.update(&Msg::Up);
+                    let _ = self.tree.update(&Msg::Up);
                 }
                 if !self.on_back && matches!(msg, Msg::Select) {
-                    self.tree.update(&Msg::Select); // expand / collapse
+                    let _ = self.tree.update(&Msg::Select); // expand / collapse
                 }
             }
             Page::TableP => {
@@ -496,11 +502,13 @@ impl Demo {
                 self.zone_nav(
                     msg,
                     before,
-                    |s| s.table.update(&Msg::Down),
+                    |s| {
+                        let _ = s.table.update(&Msg::Down);
+                    },
                     |s| s.table.selected(),
                 );
                 if matches!(msg, Msg::Up) && !self.on_back {
-                    self.table.update(&Msg::Up);
+                    let _ = self.table.update(&Msg::Up);
                 }
             }
             Page::RadioP => {
@@ -508,13 +516,19 @@ impl Demo {
                 self.zone_nav(
                     msg,
                     before,
-                    |s| s.radio.update(&Msg::Down),
+                    |s| {
+                        let _ = s.radio.update(&Msg::Down);
+                    },
                     |s| s.radio.cursor(),
                 );
                 if !self.on_back {
                     match msg {
-                        Msg::Up => self.radio.update(&Msg::Up),
-                        Msg::Select => self.radio.update(&Msg::Select),
+                        Msg::Up => {
+                            let _ = self.radio.update(&Msg::Up);
+                        }
+                        Msg::Select => {
+                            let _ = self.radio.update(&Msg::Select);
+                        }
                         _ => {}
                     }
                 }
@@ -524,11 +538,13 @@ impl Demo {
                 self.zone_nav(
                     msg,
                     before,
-                    |s| s.pager.update(&Msg::Down),
+                    |s| {
+                        let _ = s.pager.update(&Msg::Down);
+                    },
                     |s| s.pager.offset(),
                 );
                 if matches!(msg, Msg::Up) && !self.on_back {
-                    self.pager.update(&Msg::Up);
+                    let _ = self.pager.update(&Msg::Up);
                 }
             }
             Page::HelpP => {
@@ -536,11 +552,13 @@ impl Demo {
                 self.zone_nav(
                     msg,
                     before,
-                    |s| s.help.update(&Msg::Down),
+                    |s| {
+                        let _ = s.help.update(&Msg::Down);
+                    },
                     |s| s.help.offset(),
                 );
                 if matches!(msg, Msg::Up) && !self.on_back {
-                    self.help.update(&Msg::Up);
+                    let _ = self.help.update(&Msg::Up);
                 }
             }
 
@@ -598,14 +616,18 @@ impl Demo {
                 self.zone_nav(
                     msg,
                     before,
-                    |s| s.dialog.update(&Msg::Down),
+                    |s| {
+                        let _ = s.dialog.update(&Msg::Down);
+                    },
                     |s| s.dialog.selected(),
                 );
                 if !self.on_back {
                     match msg {
-                        Msg::Up => self.dialog.update(&Msg::Up),
+                        Msg::Up => {
+                            let _ = self.dialog.update(&Msg::Up);
+                        }
                         Msg::Select => {
-                            self.dialog.update(&Msg::Select);
+                            let _ = self.dialog.update(&Msg::Select);
                             if self.dialog.is_confirmed() {
                                 self.pop();
                             }

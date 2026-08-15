@@ -1,4 +1,4 @@
-use crate::{Area, Component, Msg, RenderTarget, Style};
+use crate::{Area, Component, Msg, Outcome, RenderTarget, Style};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -72,8 +72,9 @@ impl Default for StatusBar<'_> {
 }
 
 impl<'a> Component for StatusBar<'a> {
-    fn update(&mut self, _msg: &Msg) {
-        // Status bars are static; nothing to update.
+    fn update(&mut self, _msg: &Msg) -> Outcome {
+        // Status bars are static: the event stays available to whoever is next.
+        Outcome::Ignored
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {

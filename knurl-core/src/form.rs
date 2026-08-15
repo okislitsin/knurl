@@ -1,4 +1,4 @@
-use crate::{Area, Component, Msg, RenderTarget, V_SCROLL_RESERVE, draw_v_scroll};
+use crate::{Area, Component, Msg, Outcome, RenderTarget, V_SCROLL_RESERVE, draw_v_scroll};
 
 // The built-in scroll indicator (a thin track + thumb at the right edge, drawn
 // only when the field stack overflows the form area) comes from the shared
@@ -106,10 +106,24 @@ impl Form {
         }
     }
 
-    pub fn update(&mut self, msg: &Msg, fields: &mut [&mut dyn FormField]) {
+    /// Routes one event through the form and reports its [`Outcome`].
+    ///
+    /// This is the existing focus container, so it is also the first place the
+    /// routing contract shows up whole:
+    ///
+    /// - moving the focus from one field to the next is
+    ///   [`Consumed`](Outcome::Consumed);
+    /// - `Up` on the first field, or `Down` on the last, while **not** editing
+    ///   is [`Ignored`](Outcome::Ignored) - the cursor has run out of form, and
+    ///   whoever owns the form may spend the event elsewhere;
+    /// - while editing, `Up`/`Down`/`Select` belong to the field, and the
+    ///   field's own outcome is passed straight through;
+    /// - an [`Activated`](Outcome::Activated) from a field (a `Button` pressed,
+    ///   a `TextInput` finished) is propagated outwards unchanged.
+    pub fn update(&mut self, msg: &Msg, fields: &mut [&mut dyn FormField]) -> Outcome {
         let n = fields.len();
         if n == 0 {
-            return;
+            return Outcome::Ignored;
         }
         if self.focus >= n {
             self.focus = n - 1;
@@ -120,32 +134,40 @@ impl Form {
                     // The field wants Select for itself (e.g. TextInput picks a
                     // character). Deliver it, then leave edit only if the field
                     // says its interaction is finished.
-                    fields[self.focus].update(&Msg::Select);
+                    let outcome = fields[self.focus].update(&Msg::Select);
                     if fields[self.focus].editing_finished() {
                         self.editing = false;
                         fields[self.focus].set_editing(false);
                     }
+                    outcome
                 } else if fields[self.focus].editable() {
-                    self.editing = !self.editing; // enter/leave edit mode
+                    // Entering or leaving edit mode is the form's own doing.
+                    self.editing = !self.editing;
                     fields[self.focus].set_editing(self.editing);
+                    Outcome::Consumed
                 } else {
-                    fields[self.focus].update(&Msg::Select); // momentary toggle
+                    // Momentary toggle: a Checkbox consumes it, a Button
+                    // activates - either way the field's verdict is the form's.
+                    fields[self.focus].update(&Msg::Select)
                 }
             }
             // While editing, Up/Down go to the field. This guarded arm MUST sit
             // above the plain Up/Down arms or the guard never gets a chance.
-            Msg::Up | Msg::Down if self.editing => {
-                fields[self.focus].update(msg);
-            }
+            Msg::Up | Msg::Down if self.editing => fields[self.focus].update(msg),
             Msg::Up if self.focus > 0 => {
                 self.focus -= 1;
                 self.sync_focus(fields);
+                Outcome::Consumed
             }
             Msg::Down if self.focus + 1 < n => {
                 self.focus += 1;
                 self.sync_focus(fields);
+                Outcome::Consumed
             }
-            _ => {}
+            // The top of the first field or the bottom of the last one - the
+            // edge that lets forms nest - plus every message that is not the
+            // form's to route.
+            _ => Outcome::Ignored,
         }
     }
 
@@ -246,7 +268,7 @@ mod tests {
 
     use super::*;
     use crate::mock::{Op, RecordingTarget};
-    use crate::{Checkbox, Counter, TextInput, Toggle};
+    use crate::{Button, Checkbox, Counter, TextInput, Toggle};
 
     // Geometry of the shared scroll indicator (see `crate::draw_v_scroll`), so
     // the expectations below read in the same terms as the helper.
@@ -265,7 +287,9 @@ mod tests {
         }
     }
     impl Component for Probe {
-        fn update(&mut self, _msg: &Msg) {}
+        fn update(&mut self, _msg: &Msg) -> Outcome {
+            Outcome::Ignored
+        }
         fn view(&self, t: &mut dyn RenderTarget, a: Area) {
             t.draw_text(a.x, a.y, self.tag, crate::Style::Normal);
         }
@@ -294,10 +318,12 @@ mod tests {
         editing: bool,
     }
     impl Component for Capturing {
-        fn update(&mut self, msg: &Msg) {
+        fn update(&mut self, msg: &Msg) -> Outcome {
             if let Msg::Select = msg {
                 self.selects += 1;
+                return Outcome::Consumed;
             }
+            Outcome::Ignored
         }
         fn view(&self, _t: &mut dyn RenderTarget, _a: Area) {}
     }
@@ -326,13 +352,13 @@ mod tests {
             let mut fields: [&mut dyn FormField; 3] = [&mut cb, &mut tg, &mut ct];
             form.sync_focus(&mut fields);
 
-            form.update(&Msg::Down, &mut fields);
+            let _ = form.update(&Msg::Down, &mut fields);
             assert_eq!(form.focus_index(), 1);
-            form.update(&Msg::Down, &mut fields);
+            let _ = form.update(&Msg::Down, &mut fields);
             assert_eq!(form.focus_index(), 2);
-            form.update(&Msg::Down, &mut fields);
+            let _ = form.update(&Msg::Down, &mut fields);
             assert_eq!(form.focus_index(), 2); // clamped at last
-            form.update(&Msg::Up, &mut fields);
+            let _ = form.update(&Msg::Up, &mut fields);
             assert_eq!(form.focus_index(), 1);
         }
     }
@@ -343,7 +369,7 @@ mod tests {
         let mut form = Form::new();
         {
             let mut fields: [&mut dyn FormField; 1] = [&mut cb];
-            form.update(&Msg::Select, &mut fields);
+            let _ = form.update(&Msg::Select, &mut fields);
         }
         assert!(cb.is_checked());
     }
@@ -358,14 +384,14 @@ mod tests {
         let mut form = Form::new();
         {
             let mut fields: [&mut dyn FormField; 2] = [&mut cb, &mut ct];
-            form.update(&Msg::Down, &mut fields);
+            let _ = form.update(&Msg::Down, &mut fields);
             assert_eq!(form.focus_index(), 1); // Counter focused
-            form.update(&Msg::Select, &mut fields);
+            let _ = form.update(&Msg::Select, &mut fields);
             assert!(form.is_editing());
-            form.update(&Msg::Down, &mut fields); // edit: Down decrements
-            form.update(&Msg::Select, &mut fields);
+            let _ = form.update(&Msg::Down, &mut fields); // edit: Down decrements
+            let _ = form.update(&Msg::Select, &mut fields);
             assert!(!form.is_editing());
-            form.update(&Msg::Down, &mut fields); // focus stays, value unchanged
+            let _ = form.update(&Msg::Down, &mut fields); // focus stays, value unchanged
             assert_eq!(form.focus_index(), 1);
         }
         assert_eq!(ct.value(), 40);
@@ -378,12 +404,12 @@ mod tests {
         let mut form = Form::new();
         {
             let mut fields: [&mut dyn FormField; 2] = [&mut cb, &mut ct];
-            form.update(&Msg::Down, &mut fields); // focus 1 (Counter)
-            form.update(&Msg::Select, &mut fields); // enter edit
+            let _ = form.update(&Msg::Down, &mut fields); // focus 1 (Counter)
+            let _ = form.update(&Msg::Select, &mut fields); // enter edit
             assert!(form.is_editing());
-            form.update(&Msg::Up, &mut fields);
+            let _ = form.update(&Msg::Up, &mut fields);
             assert_eq!(form.focus_index(), 1);
-            form.update(&Msg::Down, &mut fields);
+            let _ = form.update(&Msg::Down, &mut fields);
             assert_eq!(form.focus_index(), 1);
         }
     }
@@ -472,7 +498,7 @@ mod tests {
             ];
             form.sync_focus(&mut m);
             for _ in 0..4 {
-                form.update(&Msg::Down, &mut m); // focus → index 4 (E)
+                let _ = form.update(&Msg::Down, &mut m); // focus → index 4 (E)
             }
         }
         assert_eq!(form.focus_index(), 4);
@@ -550,12 +576,12 @@ mod tests {
             form.sync_focus(&mut fields);
 
             // Select enters edit on the (focused) capturing field.
-            form.update(&Msg::Select, &mut fields);
+            let _ = form.update(&Msg::Select, &mut fields);
             assert!(form.is_editing());
             assert_eq!(form.focus_index(), 0);
             // Next Select is routed INTO the field (selects += 1); the field then
             // reports editing_finished → the form leaves edit mode.
-            form.update(&Msg::Select, &mut fields);
+            let _ = form.update(&Msg::Select, &mut fields);
             assert!(!form.is_editing());
         }
         assert_eq!(cap.selects, 1);
@@ -569,11 +595,98 @@ mod tests {
         let mut form = Form::new();
         {
             let mut fields: [&mut dyn FormField; 1] = [&mut ct];
-            form.update(&Msg::Select, &mut fields);
+            let _ = form.update(&Msg::Select, &mut fields);
             assert!(form.is_editing());
-            form.update(&Msg::Select, &mut fields);
+            let _ = form.update(&Msg::Select, &mut fields);
             assert!(!form.is_editing());
         }
         assert_eq!(ct.value(), 5); // unchanged by the Selects
+    }
+
+    // ── Outcome (event routing) ─────────────────────────────────────────────
+
+    /// The edge that lets a form nest inside a bigger focus chain later: the
+    /// top of the first field and the bottom of the last one come back unspent.
+    #[test]
+    fn form_spends_a_focus_move_and_hands_back_its_edges() {
+        let mut a = Checkbox::new("A");
+        let mut b = Checkbox::new("B");
+        let mut fields: [&mut dyn FormField; 2] = [&mut a, &mut b];
+        let mut form = Form::new();
+
+        assert_eq!(
+            form.update(&Msg::Up, &mut fields),
+            Outcome::Ignored,
+            "first field"
+        );
+        assert_eq!(
+            form.update(&Msg::Down, &mut fields),
+            Outcome::Consumed,
+            "moved"
+        );
+        assert_eq!(
+            form.update(&Msg::Down, &mut fields),
+            Outcome::Ignored,
+            "last field"
+        );
+        assert_eq!(
+            form.update(&Msg::Up, &mut fields),
+            Outcome::Consumed,
+            "moved back"
+        );
+    }
+
+    #[test]
+    fn form_passes_a_field_activation_straight_out() {
+        let mut cb = Checkbox::new("A");
+        let mut go = Button::new("Go");
+        let mut fields: [&mut dyn FormField; 2] = [&mut cb, &mut go];
+        let mut form = Form::new();
+
+        // On the checkbox, Select is the field's own toggle.
+        assert_eq!(form.update(&Msg::Select, &mut fields), Outcome::Consumed);
+        let _ = form.update(&Msg::Down, &mut fields);
+        // On the button it is the press the app is waiting for.
+        assert_eq!(form.update(&Msg::Select, &mut fields), Outcome::Activated);
+        assert!(go.take_pressed());
+    }
+
+    /// While editing, Up/Down belong to the field - so does the verdict on them.
+    #[test]
+    fn form_reports_the_field_verdict_while_editing() {
+        let mut c = Counter::new("N").with_range(0, 1).with_value(0);
+        let mut fields: [&mut dyn FormField; 1] = [&mut c];
+        let mut form = Form::new();
+
+        assert_eq!(
+            form.update(&Msg::Select, &mut fields),
+            Outcome::Consumed,
+            "enter edit"
+        );
+        assert!(form.is_editing());
+        assert_eq!(
+            form.update(&Msg::Up, &mut fields),
+            Outcome::Consumed,
+            "0 → 1"
+        );
+        assert_eq!(
+            form.update(&Msg::Up, &mut fields),
+            Outcome::Ignored,
+            "at max"
+        );
+        assert_eq!(
+            form.update(&Msg::Select, &mut fields),
+            Outcome::Consumed,
+            "leave edit"
+        );
+    }
+
+    #[test]
+    fn a_form_with_no_fields_hands_back_everything() {
+        let mut form = Form::new();
+        let mut none: [&mut dyn FormField; 0] = [];
+        for msg in [Msg::Up, Msg::Down, Msg::Select] {
+            assert_eq!(form.update(&msg, &mut none), Outcome::Ignored);
+        }
     }
 }

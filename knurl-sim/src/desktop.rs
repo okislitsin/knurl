@@ -516,8 +516,8 @@ impl Simulator {
 
     /// Runs the event/render loop until the window closes.
     ///
-    /// `on_frame` wires up the Elm cycle - `for m in msgs { c.update(m) }` then
-    /// `c.view(target, area)`. The target is a `&mut dyn RenderTarget`. Return
+    /// `on_frame` wires up the Elm cycle - `for m in msgs { let _ = c.update(m); }`
+    /// then `c.view(target, area)`. The target is a `&mut dyn RenderTarget`. Return
     /// `()` to keep running, or [`Flow::Quit`] to exit.
     ///
     /// Every frame is presented, but **not** globally cleared: the screen is
@@ -539,7 +539,7 @@ impl Simulator {
     /// Like [`run`](Simulator::run), but with **no global screen clear** - each
     /// widget repaints only its own area when dirty (partial redraw). The
     /// callback owns the Elm cycle and returns a [`Frame`]: after
-    /// `for m in msgs { c.update(m) }`, if nothing is dirty return
+    /// `for m in msgs { let _ = c.update(m); }`, if nothing is dirty return
     /// [`Frame::Skipped`]; otherwise call each widget's `c.view(..)` (each
     /// self-gates and clears its own area) and return [`Frame::Painted`] (or
     /// [`Frame::Quit`]). On a structural transition (nav / modal close) the app

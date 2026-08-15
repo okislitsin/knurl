@@ -1,6 +1,6 @@
 use core::cell::Cell;
 
-use crate::{Align, Area, Component, Msg, RenderTarget, Style};
+use crate::{Align, Area, Component, Msg, Outcome, RenderTarget, Style};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -68,8 +68,9 @@ impl<'a> Title<'a> {
 }
 
 impl<'a> Component for Title<'a> {
-    fn update(&mut self, _msg: &Msg) {
-        // Titles are static; nothing to update.
+    fn update(&mut self, _msg: &Msg) -> Outcome {
+        // Titles are static: the event stays available to whoever is next.
+        Outcome::Ignored
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
@@ -145,8 +146,9 @@ impl Default for Separator {
 }
 
 impl Component for Separator {
-    fn update(&mut self, _msg: &Msg) {
-        // Separators are static; nothing to update.
+    fn update(&mut self, _msg: &Msg) -> Outcome {
+        // Separators are static: the event stays available to whoever is next.
+        Outcome::Ignored
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
@@ -192,8 +194,9 @@ impl Default for Spacer {
 }
 
 impl Component for Spacer {
-    fn update(&mut self, _msg: &Msg) {
-        // Nothing to update.
+    fn update(&mut self, _msg: &Msg) -> Outcome {
+        // Empty space takes nothing.
+        Outcome::Ignored
     }
 
     fn view(&self, _target: &mut dyn RenderTarget, _area: Area) {

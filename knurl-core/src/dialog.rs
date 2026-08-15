@@ -1,6 +1,6 @@
 use core::cell::Cell;
 
-use crate::{Area, BorderStyle, Component, Msg, RenderTarget, Style};
+use crate::{Area, BorderStyle, Component, Msg, Outcome, RenderTarget, Style};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -86,21 +86,28 @@ impl<'a> Dialog<'a> {
 }
 
 impl<'a> Component for Dialog<'a> {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
         let n = self.buttons.len();
         match msg {
             Msg::Up | Msg::Left if self.selected > 0 => {
                 self.selected -= 1;
                 self.dirty.set(true);
+                Outcome::Consumed
             }
             Msg::Down | Msg::Right if n > 0 && self.selected + 1 < n => {
                 self.selected += 1;
                 self.dirty.set(true);
+                Outcome::Consumed
             }
-            // Confirm changes no on-screen pixels of the dialog itself; the app
-            // reads is_confirmed() and typically closes the modal.
-            Msg::Select => self.confirmed = true,
-            _ => {}
+            // Confirm changes no on-screen pixels of the dialog itself - so no
+            // dirty - but it is precisely the moment the app acts on: it reads
+            // selected_button() (or is_confirmed()) and closes the modal.
+            Msg::Select => {
+                self.confirmed = true;
+                Outcome::Activated
+            }
+            // Either end of the button row, or a message that is not ours.
+            _ => Outcome::Ignored,
         }
     }
 
@@ -401,12 +408,12 @@ mod tests {
     #[test]
     fn dialog_navigate_and_confirm() {
         let mut d = Dialog::new("t", "m", BTNS);
-        d.update(&Msg::Down);
+        let _ = d.update(&Msg::Down);
         assert_eq!(d.selected(), 1);
         assert_eq!(d.selected_button(), "No");
-        d.update(&Msg::Up);
+        let _ = d.update(&Msg::Up);
         assert_eq!(d.selected(), 0);
-        d.update(&Msg::Select);
+        let _ = d.update(&Msg::Select);
         assert!(d.is_confirmed());
         d.reset();
         assert!(!d.is_confirmed());
@@ -415,10 +422,36 @@ mod tests {
     #[test]
     fn dialog_clamp() {
         let mut d = Dialog::new("t", "m", BTNS);
-        d.update(&Msg::Up);
+        let _ = d.update(&Msg::Up);
         assert_eq!(d.selected(), 0);
         let mut d2 = Dialog::new("t", "m", BTNS).with_selected(1);
-        d2.update(&Msg::Down);
+        let _ = d2.update(&Msg::Down);
         assert_eq!(d2.selected(), 1);
+    }
+
+    // ── Outcome (event routing) ─────────────────────────────────────────────
+
+    #[test]
+    fn dialog_spends_a_step_hands_back_an_edge_and_activates_on_select() {
+        let mut d = Dialog::new("t", "m", BTNS);
+        assert_eq!(
+            d.update(&Msg::Up),
+            Outcome::Ignored,
+            "Up on the first button"
+        );
+        assert_eq!(
+            d.update(&Msg::Down),
+            Outcome::Consumed,
+            "moved to the next button"
+        );
+        assert_eq!(
+            d.update(&Msg::Down),
+            Outcome::Ignored,
+            "Down on the last button"
+        );
+        // Confirming repaints nothing, and is still the app's cue - the one
+        // case that proves Outcome is not the dirty flag under another name.
+        assert_eq!(d.update(&Msg::Select), Outcome::Activated);
+        assert_eq!(d.selected_button(), "No");
     }
 }

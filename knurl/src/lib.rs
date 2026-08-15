@@ -6,7 +6,7 @@
 pub use knurl_core::{
     Align, Area, BarChart, BarChartModel, BorderStyle, Bordered, Button, Checkbox, Component,
     Constraint, Counter, Dialog, Form, FormField, HStack, Help, Label, LineGauge, LinesModel, List,
-    ListModel, Marker, Msg, Nav, Padded, Padding, Pager, Paginator, Picker, PickerItem,
+    ListModel, Marker, Msg, Nav, Outcome, Padded, Padding, Pager, Paginator, Picker, PickerItem,
     ProgressBar, Radio, RenderTarget, Router, Scrollbar, Separator, Slider, Spacer, Spinner,
     SpinnerStyle, StatusBar, Style, Table, TableModel, Tabs, TextInput, Title, Toggle, Tree,
     TreeItem, TreeModel, VStack,

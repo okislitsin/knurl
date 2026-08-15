@@ -1,7 +1,8 @@
 use core::cell::Cell;
 
 use crate::{
-    Area, Component, Msg, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band, draw_v_scroll,
+    Area, Component, Msg, Outcome, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band,
+    draw_v_scroll,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -272,45 +273,58 @@ impl<'a, M: TreeModel + ?Sized> Tree<'a, M> {
 }
 
 impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
         if self.model.item_count() == 0 {
-            return;
+            // Nothing to walk: every event stays available to the container.
+            return Outcome::Ignored;
         }
         // Navigation, expansion and scrolling all read out of three fields;
         // comparing them afterwards is cheaper than threading a flag through
         // every arm - and it cannot forget one. Re-expanding an already open
         // node, or Up at the top, leaves all three alone and stays clean.
         let before = (self.selected, self.offset, self.expanded);
-        match msg {
-            Msg::Down => {
-                if let Some(n) = self.next_visible(self.selected) {
+        let outcome = match msg {
+            Msg::Down => match self.next_visible(self.selected) {
+                Some(n) => {
                     self.selected = n;
                     self.scroll_into_view();
+                    Outcome::Consumed
                 }
-            }
-            Msg::Up => {
-                if let Some(p) = self.prev_visible(self.selected) {
+                // Last visible node: the cursor has run out of tree.
+                None => Outcome::Ignored,
+            },
+            Msg::Up => match self.prev_visible(self.selected) {
+                Some(p) => {
                     self.selected = p;
                     self.scroll_into_view();
+                    Outcome::Consumed
                 }
-            }
-            Msg::Right => {
-                if self.has_children(self.selected) {
-                    self.set_expanded(self.selected, true);
-                }
+                None => Outcome::Ignored,
+            },
+            // Opening an already-open node (or a leaf) has nothing to do.
+            Msg::Right if self.has_children(self.selected) && !self.is_expanded(self.selected) => {
+                self.set_expanded(self.selected, true);
+                Outcome::Consumed
             }
             Msg::Left if self.has_children(self.selected) && self.is_expanded(self.selected) => {
                 self.set_expanded(self.selected, false);
+                Outcome::Consumed
             }
+            // On a parent, Select is the tree's own fold/unfold - it goes no
+            // further. On a leaf there is nothing to fold, and picking a leaf
+            // is the choice the app acts on (it reads selected()).
             Msg::Select if self.has_children(self.selected) => {
                 let e = self.is_expanded(self.selected);
                 self.set_expanded(self.selected, !e);
+                Outcome::Consumed
             }
-            _ => {}
-        }
+            Msg::Select => Outcome::Activated,
+            _ => Outcome::Ignored,
+        };
         if (self.selected, self.offset, self.expanded) != before {
             self.dirty.set(true);
         }
+        outcome
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
@@ -502,7 +516,7 @@ mod tests {
     fn tree_expand_shows_child_with_guide_and_triangle() {
         let mut tree = Tree::new(ITEMS);
         tree.focus();
-        tree.update(&Msg::Select); // expand Settings
+        let _ = tree.update(&Msg::Select); // expand Settings
         assert!(tree.is_expanded_node(0));
         let mut t = RecordingTarget::new(160, 80);
         tree.view(&mut t, Area::new(0, 0, 160, 80));
@@ -519,7 +533,7 @@ mod tests {
     #[test]
     fn tree_down_skips_hidden() {
         let mut tree = Tree::new(ITEMS);
-        tree.update(&Msg::Down); // Settings collapsed → next root Sensors (5)
+        let _ = tree.update(&Msg::Down); // Settings collapsed → next root Sensors (5)
         assert_eq!(tree.selected(), 5);
         assert_eq!(tree.selected_item(), "Sensors");
     }
@@ -527,17 +541,17 @@ mod tests {
     #[test]
     fn tree_right_expands_left_collapses() {
         let mut tree = Tree::new(ITEMS);
-        tree.update(&Msg::Right);
+        let _ = tree.update(&Msg::Right);
         assert!(tree.is_expanded_node(0));
-        tree.update(&Msg::Left);
+        let _ = tree.update(&Msg::Left);
         assert!(!tree.is_expanded_node(0));
     }
 
     #[test]
     fn tree_select_again_collapses() {
         let mut tree = Tree::new(ITEMS);
-        tree.update(&Msg::Select);
-        tree.update(&Msg::Select);
+        let _ = tree.update(&Msg::Select);
+        let _ = tree.update(&Msg::Select);
         assert!(!tree.is_expanded_node(0));
     }
 
@@ -551,8 +565,8 @@ mod tests {
         // 3 visible roots > 2 rows → indicator present.
         assert!(fills(&t0).iter().any(|(_, st)| *st == Style::Focus)); // thumb
         // Move down twice → About (7); offset advances so it stays visible.
-        tree.update(&Msg::Down); // Sensors (5)
-        tree.update(&Msg::Down); // About (7)
+        let _ = tree.update(&Msg::Down); // Sensors (5)
+        let _ = tree.update(&Msg::Down); // About (7)
         let mut t1 = RecordingTarget::new(160, 20);
         tree.view(&mut t1, Area::new(0, 0, 160, 20));
         assert!(
@@ -613,8 +627,8 @@ mod tests {
     #[test]
     fn unfocused_tree_marks_a_leaf_cursor() {
         let mut tree = Tree::new(ITEMS);
-        tree.update(&Msg::Down); // Sensors (parent)
-        tree.update(&Msg::Down); // About (leaf, row 2)
+        let _ = tree.update(&Msg::Down); // Sensors (parent)
+        let _ = tree.update(&Msg::Down); // About (leaf, row 2)
         assert_eq!(tree.selected_item(), "About");
 
         let mut t = RecordingTarget::new(160, 80);
@@ -639,8 +653,8 @@ mod tests {
     fn focused_tree_leaf_marker_joins_the_band() {
         let mut tree = Tree::new(ITEMS);
         tree.focus();
-        tree.update(&Msg::Down);
-        tree.update(&Msg::Down); // About
+        let _ = tree.update(&Msg::Down);
+        let _ = tree.update(&Msg::Down); // About
         let mut t = RecordingTarget::new(160, 80);
         tree.view(&mut t, Area::new(0, 0, 160, 80));
         assert!(texts(&t).contains(&(0, 20, ">".into(), Style::Focus)));
@@ -706,18 +720,18 @@ mod tests {
 
         // Up at the top, Left on a collapsed node, Select on a leaf: no state
         // moves, so the picture does not change.
-        tree.update(&Msg::Up);
-        tree.update(&Msg::Left);
-        tree.update(&Msg::Tick);
+        let _ = tree.update(&Msg::Up);
+        let _ = tree.update(&Msg::Left);
+        let _ = tree.update(&Msg::Tick);
         assert!(!tree.dirty());
 
-        tree.update(&Msg::Right); // expands "Settings"
+        let _ = tree.update(&Msg::Right); // expands "Settings"
         assert!(tree.dirty());
         tree.mark_clean();
-        tree.update(&Msg::Right); // already expanded → no change
+        let _ = tree.update(&Msg::Right); // already expanded → no change
         assert!(!tree.dirty());
 
-        tree.update(&Msg::Down); // moves to "Display"
+        let _ = tree.update(&Msg::Down); // moves to "Display"
         assert!(tree.dirty());
         tree.mark_clean();
 
@@ -736,9 +750,93 @@ mod tests {
         tree.view(&mut t0, area);
         assert!(!t0.ops().is_empty());
 
-        tree.update(&Msg::Up); // clamped at the top
+        let _ = tree.update(&Msg::Up); // clamped at the top
         let mut t1 = RecordingTarget::new(160, 80);
         tree.view(&mut t1, area);
         assert!(t1.ops().is_empty());
+    }
+
+    // ── Outcome (event routing) ─────────────────────────────────────────────
+
+    #[test]
+    fn tree_spends_a_step_and_hands_back_an_edge() {
+        let mut tree = Tree::new(ITEMS);
+        // Collapsed: the three roots are the only visible nodes.
+        assert_eq!(
+            tree.update(&Msg::Up),
+            Outcome::Ignored,
+            "Up on the first root"
+        );
+        assert_eq!(
+            tree.update(&Msg::Down),
+            Outcome::Consumed,
+            "a step in the middle"
+        );
+        assert_eq!(tree.update(&Msg::Down), Outcome::Consumed);
+        assert_eq!(
+            tree.update(&Msg::Down),
+            Outcome::Ignored,
+            "Down on the last node"
+        );
+    }
+
+    /// Select means two different things in a tree, so it reports two different
+    /// outcomes: folding a parent is the tree's own business, picking a leaf is
+    /// the app's.
+    #[test]
+    fn tree_select_folds_a_parent_and_activates_a_leaf() {
+        let mut tree = Tree::new(ITEMS);
+        assert_eq!(
+            tree.update(&Msg::Select),
+            Outcome::Consumed,
+            "expand \"Settings\""
+        );
+        assert_eq!(
+            tree.update(&Msg::Select),
+            Outcome::Consumed,
+            "collapse it again"
+        );
+
+        // Walk to "About" (index 7), a root-level leaf.
+        while tree.selected() != 7 {
+            let _ = tree.update(&Msg::Down);
+        }
+        assert_eq!(
+            tree.update(&Msg::Select),
+            Outcome::Activated,
+            "picking a leaf"
+        );
+    }
+
+    /// Left/Right (keyboards only) fold explicitly: asking for the state the
+    /// node is already in has nothing to do, so the event comes back.
+    #[test]
+    fn tree_explicit_fold_hands_back_a_no_op() {
+        let mut tree = Tree::new(ITEMS);
+        assert_eq!(
+            tree.update(&Msg::Left),
+            Outcome::Ignored,
+            "already collapsed"
+        );
+        assert_eq!(tree.update(&Msg::Right), Outcome::Consumed, "expanded");
+        assert_eq!(
+            tree.update(&Msg::Right),
+            Outcome::Ignored,
+            "already expanded"
+        );
+        assert_eq!(tree.update(&Msg::Left), Outcome::Consumed, "collapsed");
+    }
+
+    #[test]
+    fn empty_tree_hands_back_everything() {
+        const NONE: &[TreeItem] = &[];
+        let mut tree = Tree::new(NONE);
+        for msg in [Msg::Up, Msg::Down, Msg::Select, Msg::Tick] {
+            assert_eq!(
+                tree.update(&msg),
+                Outcome::Ignored,
+                "{msg:?} on an empty tree"
+            );
+        }
     }
 }

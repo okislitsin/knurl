@@ -1,6 +1,6 @@
 use core::cell::Cell;
 
-use crate::{Area, Component, Msg, RenderTarget, Scrollbar, Style, V_SCROLL_RESERVE};
+use crate::{Area, Component, Msg, Outcome, RenderTarget, Scrollbar, Style, V_SCROLL_RESERVE};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -58,23 +58,26 @@ impl<'a> Help<'a> {
 }
 
 impl<'a> Component for Help<'a> {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
         let n = self.items.len();
         if n == 0 {
-            return;
+            return Outcome::Ignored;
         }
         let page = self.page_size.get().max(1);
         match msg {
             Msg::Down if self.offset + page < n => {
                 self.offset += 1;
                 self.dirty.set(true);
+                Outcome::Consumed
             }
             Msg::Up if self.offset > 0 => {
                 self.offset -= 1;
                 self.dirty.set(true);
+                Outcome::Consumed
             }
-            // A clamped end scrolls nothing, so the frame is skipped.
-            _ => {}
+            // A clamped end scrolls nothing, so the frame is skipped - and the
+            // event is handed back for the container to route elsewhere.
+            _ => Outcome::Ignored,
         }
     }
 
@@ -182,7 +185,7 @@ mod tests {
         // Scroll indicator present.
         assert!(t.ops().iter().any(|op| matches!(op, Op::Fill { .. })));
 
-        help.update(&Msg::Down);
+        let _ = help.update(&Msg::Down);
         assert_eq!(help.offset(), 1);
         let mut t2 = RecordingTarget::new(120, 20);
         help.view(&mut t2, Area::new(0, 0, 120, 20));
@@ -192,14 +195,14 @@ mod tests {
     #[test]
     fn help_scroll_clamps() {
         let mut help = Help::new(&[("a", "A"), ("b", "B")]);
-        help.update(&Msg::Up);
+        let _ = help.update(&Msg::Up);
         assert_eq!(help.offset(), 0);
     }
 
     #[test]
     fn help_empty_safe() {
         let mut help = Help::new(&[]);
-        help.update(&Msg::Down);
+        let _ = help.update(&Msg::Down);
         assert_eq!(help.offset(), 0);
         let mut t = RecordingTarget::new(120, 30);
         help.view(&mut t, Area::new(0, 0, 120, 30));
@@ -217,14 +220,36 @@ mod tests {
         help.view(&mut t, Area::new(0, 0, 120, 20));
         assert!(!help.dirty());
 
-        help.update(&Msg::Up); // already at the top
-        help.update(&Msg::Tick);
+        let _ = help.update(&Msg::Up); // already at the top
+        let _ = help.update(&Msg::Tick);
         assert!(!help.dirty());
 
-        help.update(&Msg::Down);
+        let _ = help.update(&Msg::Down);
         assert!(help.dirty());
         help.mark_clean();
-        help.update(&Msg::Down); // clamped at the last page
+        let _ = help.update(&Msg::Down); // clamped at the last page
         assert!(!help.dirty());
+    }
+
+    // ── Outcome (event routing) ─────────────────────────────────────────────
+
+    #[test]
+    fn help_spends_a_scroll_and_hands_back_an_edge() {
+        const ITEMS: &[(&str, &str)] = &[("a", "1"), ("b", "2"), ("c", "3"), ("d", "4")];
+        let mut h = Help::new(ITEMS);
+        let mut t = RecordingTarget::new(120, 20); // 2 rows of 4 → it scrolls
+        h.view(&mut t, Area::new(0, 0, 120, 20));
+
+        assert_eq!(h.update(&Msg::Up), Outcome::Ignored, "Up at the top");
+        assert_eq!(h.update(&Msg::Down), Outcome::Consumed, "a row of scroll");
+        while h.offset() + 2 < ITEMS.len() {
+            assert_eq!(h.update(&Msg::Down), Outcome::Consumed);
+        }
+        assert_eq!(h.update(&Msg::Down), Outcome::Ignored, "Down at the bottom");
+        assert_eq!(
+            h.update(&Msg::Select),
+            Outcome::Ignored,
+            "Help has nothing to pick"
+        );
     }
 }
