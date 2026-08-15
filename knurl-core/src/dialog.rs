@@ -93,6 +93,18 @@ impl<'a> Component for Dialog<'a> {
         }
     }
 
+    /// Draws the box, then title / message / button row - each row only if the
+    /// inner box is tall enough for it, the title having priority:
+    ///
+    /// | Inner height        | Drawn                    |
+    /// |---------------------|--------------------------|
+    /// | `< line_height`     | box + (clipped) title    |
+    /// | `< 2 * line_height` | box + title              |
+    /// | `>= 2 * line_height`| box + title + message + buttons |
+    ///
+    /// The message and the button row share the same threshold: below two rows
+    /// the last row *is* the title row, so drawing buttons there would overwrite
+    /// the title - the title wins.
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
         target.draw_box(area, self.border);
         let Some(inner) = area.inner_by(self.border.thickness()) else {
@@ -121,7 +133,11 @@ impl<'a> Component for Dialog<'a> {
         }
 
         // Buttons on the last inner row, laid out horizontally; the focused one is
-        // boxed and drawn Focus.
+        // boxed and drawn Focus. Skipped when the inner box is under two rows tall
+        // (see the note on `draw`): the last row would land on the title.
+        if inner.h < 2 * line_h {
+            return;
+        }
         let by = inner.y + inner.h - line_h;
         let right = inner.x + inner.w;
         let mut x = inner.x;
@@ -211,6 +227,54 @@ mod tests {
                 |op| matches!(op, Op::Box { area, border: BorderStyle::Single } if area.y == 39)
             )
         );
+    }
+
+    /// A box too short for a button row must not panic (a u16 underflow on
+    /// `inner.h - line_h`) nor place a row below the area. Only the vertical
+    /// axis is asserted: the button layout can still overshoot horizontally in a
+    /// box narrower than one character cell, which is a separate matter.
+    #[test]
+    fn dialog_short_area_draws_nothing_outside_and_never_panics() {
+        for h in [0u16, 1, 2, 3, 9, 10, 11, 12, 21, 22] {
+            for w in [0u16, 1, 3, 6, 40] {
+                let d = Dialog::new("Confirm", "Sure?", BTNS);
+                let mut t = RecordingTarget::new(128, 64);
+                let area = Area::new(0, 0, w, h);
+                d.view(&mut t, area);
+                if w == 0 || h == 0 {
+                    continue; // nothing to contain
+                }
+                for op in t.ops() {
+                    let y = match op {
+                        Op::Text { y, .. } => *y,
+                        Op::Box { area: a, .. }
+                        | Op::Clear { area: a }
+                        | Op::Fill { area: a, .. }
+                        | Op::Bar { area: a, .. } => a.y,
+                    };
+                    assert!(y < area.y + area.h, "op {op:?} starts below {area:?}");
+                }
+            }
+        }
+    }
+
+    /// Under two rows the button row would land on the title, so the title wins
+    /// and no buttons are drawn.
+    #[test]
+    fn dialog_omits_buttons_when_under_two_rows() {
+        // Rounded border → inner height = h - 2; line_height = 10.
+        let d = Dialog::new("Confirm", "Sure?", BTNS);
+        let mut t = RecordingTarget::new(128, 64);
+        d.view(&mut t, Area::new(0, 0, 120, 21)); // inner.h = 19 < 20
+        let tx = texts(&t);
+        assert!(tx.iter().any(|(_, y, s, _)| *y == 1 && s == "Confirm"));
+        assert!(!tx.iter().any(|(_, _, s, _)| s == "Yes" || s == "No"));
+
+        // One row taller (inner.h = 20) the buttons fit on the last row.
+        let d2 = Dialog::new("Confirm", "Sure?", BTNS);
+        let mut t2 = RecordingTarget::new(128, 64);
+        d2.view(&mut t2, Area::new(0, 0, 120, 22));
+        assert!(texts(&t2).iter().any(|(_, y, s, _)| *y == 11 && s == "Yes"));
     }
 
     #[test]
