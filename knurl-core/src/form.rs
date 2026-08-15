@@ -1,3 +1,5 @@
+use core::cell::Cell;
+
 use crate::{Area, Component, Msg, Outcome, RenderTarget, V_SCROLL_RESERVE, draw_v_scroll};
 
 // The built-in scroll indicator (a thin track + thumb at the right edge, drawn
@@ -58,6 +60,34 @@ pub trait FormField: Component {
     }
 }
 
+// ── Layout fingerprint ────────────────────────────────────────────────────────
+
+/// What the stack looked like the last time [`Form::view`] laid it out.
+///
+/// The form re-lays out on every frame, but each field gates itself on its own
+/// dirty flag - so when the *stack* moves and the *fields* have not changed,
+/// nobody repaints and the panel keeps the previous layout (see [`Form::view`]).
+/// This is the cheap, heapless way to notice that: a handful of words in a
+/// [`Cell`], compared once per frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LayoutStamp {
+    /// The window the stack was laid into. A form that was moved or resized
+    /// re-lays out exactly like one whose fields changed.
+    area: Area,
+    /// Number of fields: catches the common show/hide of whole fields.
+    n: usize,
+    /// Summed height: catches a single field growing or shrinking.
+    total: u16,
+    /// Scroll offset: catches the stack sliding under an unchanged field set
+    /// (moving the focus in an overflowing form does exactly this).
+    scroll: u16,
+    /// Rolling hash of the per-field heights, in order:
+    /// `h = h * 31 + height`. `total` alone cannot tell "field 1 grew by a row
+    /// and field 2 shrank by one" from "nothing happened"; order-sensitive
+    /// mixing can. One multiply-add per field, no allocation.
+    heights: u32,
+}
+
 // ── Form ──────────────────────────────────────────────────────────────────────
 
 /// A focus/edit-mode controller for a set of [`FormField`]s under 3 buttons
@@ -70,6 +100,9 @@ pub trait FormField: Component {
 pub struct Form {
     focus: usize,
     editing: bool,
+    /// The previous frame's layout, for the re-layout check in
+    /// [`view`](Form::view). `Cell` because `view` takes `&self`.
+    stamp: Cell<Option<LayoutStamp>>,
 }
 
 impl Form {
@@ -77,6 +110,7 @@ impl Form {
         Self {
             focus: 0,
             editing: false,
+            stamp: Cell::new(None),
         }
     }
 
@@ -205,16 +239,50 @@ impl Form {
     /// grows from one row to two), entering edit can shift the fields below it.
     /// This is intentional and cheap - the alternative (reserving each field's
     /// max height up front) wastes rows on the common non-editing case.
+    ///
+    /// ## Re-layout: when the form overrides the dirty gate
+    ///
+    /// Fields paint themselves only when *they* are dirty, which is wrong the
+    /// moment the **stack** moves under them: hide three sliders and the two
+    /// clean fields left over would draw nothing, leaving the panel showing
+    /// rows that no longer exist - with the focus band on one of them, so
+    /// `Select` would act on something the user cannot see.
+    ///
+    /// So the form fingerprints its layout ([`LayoutStamp`]: the area, the
+    /// field count, the total height, the scroll offset and an order-sensitive
+    /// hash of the individual heights) and, whenever the fingerprint differs
+    /// from the previous frame's, clears `area` and
+    /// [`mark_dirty`](Component::mark_dirty)s every field before drawing - so
+    /// they repaint through their own contract rather than behind its back.
+    /// An unchanged form still draws nothing at all.
     pub fn view(&self, target: &mut dyn RenderTarget, area: Area, fields: &[&dyn FormField]) {
-        if area.w == 0 || area.h == 0 || fields.is_empty() {
+        if area.w == 0 || area.h == 0 {
+            return;
+        }
+        if fields.is_empty() {
+            // Every field hidden at once is a re-layout too: the rows they
+            // occupied are ours to wipe, and nobody is left to do it.
+            self.restamp(
+                LayoutStamp {
+                    area,
+                    n: 0,
+                    total: 0,
+                    scroll: 0,
+                    heights: 0,
+                },
+                target,
+                fields,
+            );
             return;
         }
         let focus = self.focus.min(fields.len() - 1);
 
-        // Pass 1: total stack height + the focused field's top/bottom.
+        // Pass 1: total stack height + the focused field's top/bottom, and the
+        // height hash the re-layout check needs.
         let mut total: u16 = 0;
         let mut focus_top: u16 = 0;
         let mut focus_h: u16 = 0;
+        let mut heights: u32 = 0;
         for (i, f) in fields.iter().enumerate() {
             let h = f.height(&*target).max(1);
             if i == focus {
@@ -222,6 +290,7 @@ impl Form {
                 focus_h = h;
             }
             total = total.saturating_add(h);
+            heights = heights.wrapping_mul(31).wrapping_add(h as u32);
         }
         let focus_bottom = focus_top.saturating_add(focus_h);
 
@@ -238,6 +307,20 @@ impl Form {
                 scroll = focus_top;
             }
         }
+
+        // Did the stack move? If so, wipe the area and put every field back in
+        // the dirty state its own view() gates on.
+        self.restamp(
+            LayoutStamp {
+                area,
+                n: fields.len(),
+                total,
+                scroll,
+                heights,
+            },
+            target,
+            fields,
+        );
 
         // Reserve a thin column for the scroll indicator only when overflowing.
         let bar_w = if overflowing { V_SCROLL_RESERVE } else { 0 };
@@ -270,6 +353,24 @@ impl Form {
             );
         }
     }
+
+    /// Compares this frame's layout with the previous one and, if it moved,
+    /// clears the area and marks every field for repaint. See [`view`](Form::view).
+    fn restamp(
+        &self,
+        stamp: LayoutStamp,
+        target: &mut dyn RenderTarget,
+        fields: &[&dyn FormField],
+    ) {
+        if self.stamp.get() == Some(stamp) {
+            return;
+        }
+        self.stamp.set(Some(stamp));
+        target.clear(stamp.area);
+        for f in fields.iter() {
+            f.mark_dirty();
+        }
+    }
 }
 
 impl Default for Form {
@@ -287,6 +388,7 @@ mod tests {
     use super::*;
     use crate::mock::{Op, RecordingTarget};
     use crate::{Button, Checkbox, Counter, TextInput, Toggle};
+    use core::cell::Cell;
 
     // Geometry of the shared scroll indicator (see `crate::draw_v_scroll`), so
     // the expectations below read in the same terms as the helper.
@@ -315,6 +417,50 @@ mod tests {
     impl FormField for Probe {
         fn height(&self, _t: &dyn RenderTarget) -> u16 {
             self.h
+        }
+    }
+
+    /// A **dirty-gated** probe - the same tag-at-the-row-origin trick as
+    /// [`Probe`], but with a real widget's dirty contract (draws only when
+    /// dirty, goes clean once painted) and a settable height.
+    ///
+    /// The re-layout tests need this: an always-dirty probe repaints every
+    /// frame and so cannot show the bug, which is precisely that *clean* fields
+    /// refuse to redraw after the stack under them has moved.
+    struct Gated {
+        tag: &'static str,
+        h: Cell<u16>,
+        dirty: Cell<bool>,
+    }
+    impl Gated {
+        fn new(tag: &'static str, h: u16) -> Self {
+            Self {
+                tag,
+                h: Cell::new(h),
+                dirty: Cell::new(true),
+            }
+        }
+    }
+    impl Component for Gated {
+        fn update(&mut self, _msg: &Msg) -> Outcome {
+            Outcome::Ignored
+        }
+        fn draw(&self, t: &mut dyn RenderTarget, a: Area) {
+            t.draw_text(a.x, a.y, self.tag, crate::Style::Normal);
+        }
+        fn dirty(&self) -> bool {
+            self.dirty.get()
+        }
+        fn mark_clean(&self) {
+            self.dirty.set(false);
+        }
+        fn mark_dirty(&self) {
+            self.dirty.set(true);
+        }
+    }
+    impl FormField for Gated {
+        fn height(&self, _t: &dyn RenderTarget) -> u16 {
+            self.h.get()
         }
     }
 
@@ -705,6 +851,180 @@ mod tests {
         let mut none: [&mut dyn FormField; 0] = [];
         for msg in [Msg::Up, Msg::Down, Msg::Select] {
             assert_eq!(form.update(&msg, &mut none), Outcome::Ignored);
+        }
+    }
+
+    // ── Re-layout × dirty gating ────────────────────────────────────────────
+
+    /// Did anything at all reach the target?
+    fn drew_anything(t: &RecordingTarget) -> bool {
+        !t.ops().is_empty()
+    }
+
+    /// Was the whole `area` cleared in one go (the form's own re-layout wipe)?
+    fn cleared_whole(t: &RecordingTarget, area: Area) -> bool {
+        t.ops()
+            .iter()
+            .any(|op| matches!(op, Op::Clear { area: a } if *a == area))
+    }
+
+    /// The headline bug: the field set shrinks under a form whose surviving
+    /// fields are both clean, and the frame comes out empty - the panel keeps
+    /// showing rows that no longer exist, with the focus highlight on one of
+    /// them, while `Select` acts on something else entirely.
+    #[test]
+    fn form_repaints_the_whole_area_when_the_field_set_shrinks() {
+        let area = Area::new(0, 0, 120, 60);
+        let picker = Gated::new("P", 10);
+        let (r, g, b) = (
+            Gated::new("R", 10),
+            Gated::new("G", 10),
+            Gated::new("B", 10),
+        );
+        let back = Gated::new("K", 10);
+        let form = Form::new();
+
+        // Frame 1: the full set, everything dirty, "back" lands on row 4.
+        let mut t1 = RecordingTarget::new(120, 60);
+        {
+            let fields: [&dyn FormField; 5] = [&picker, &r, &g, &b, &back];
+            form.view(&mut t1, area, &fields);
+        }
+        assert_eq!(tag_y(&t1, "K"), Some(40));
+
+        // Frame 2: the three sliders are gone. Both survivors are clean, so
+        // without the re-layout check nothing is drawn at all.
+        let mut t2 = RecordingTarget::new(120, 60);
+        {
+            let fields: [&dyn FormField; 2] = [&picker, &back];
+            form.view(&mut t2, area, &fields);
+        }
+        assert!(drew_anything(&t2), "the shrunk frame drew nothing");
+        assert!(
+            cleared_whole(&t2, area),
+            "the rows of the vanished sliders were never cleared"
+        );
+        assert_eq!(tag_y(&t2, "P"), Some(0), "picker redrawn");
+        assert_eq!(tag_y(&t2, "K"), Some(10), "back redrawn at its new row");
+
+        // Frame 3: nothing changed - the form must go quiet again, or every
+        // frame repaints the screen and the dirty gate is worthless.
+        let mut t3 = RecordingTarget::new(120, 60);
+        {
+            let fields: [&dyn FormField; 2] = [&picker, &back];
+            form.view(&mut t3, area, &fields);
+        }
+        assert!(!drew_anything(&t3), "a settled form must draw nothing");
+    }
+
+    /// The same mechanism with a constant field set: one field's own height
+    /// changes (a `TextInput` growing 1 → 2 rows on entering edit), so the
+    /// clean field below it has to move - and on the way back the freed row
+    /// has to be wiped, or it keeps a ghost of the second row.
+    #[test]
+    fn form_repaints_when_a_field_changes_its_own_height() {
+        let area = Area::new(0, 0, 120, 60);
+        let grower = Gated::new("T", 10);
+        let below = Gated::new("Z", 10);
+        let form = Form::new();
+        let fields: [&dyn FormField; 2] = [&grower, &below];
+
+        let mut t1 = RecordingTarget::new(120, 60);
+        form.view(&mut t1, area, &fields);
+        assert_eq!(tag_y(&t1, "Z"), Some(10));
+
+        // Grow: 1 row → 2 rows. "below" is clean but must move to y = 20.
+        grower.h.set(20);
+        let mut t2 = RecordingTarget::new(120, 60);
+        form.view(&mut t2, area, &fields);
+        assert_eq!(tag_y(&t2, "Z"), Some(20), "clean field did not follow");
+
+        // Shrink back: the row the grower gave up must be cleared.
+        grower.h.set(10);
+        let mut t3 = RecordingTarget::new(120, 60);
+        form.view(&mut t3, area, &fields);
+        assert!(
+            cleared_whole(&t3, area),
+            "the freed row keeps a ghost of the second line"
+        );
+        assert_eq!(tag_y(&t3, "Z"), Some(10));
+    }
+
+    /// Scrolling moves every field without changing the set or any height, so
+    /// the offset has to be part of the fingerprint in its own right.
+    #[test]
+    fn form_repaints_when_only_the_scroll_offset_moves() {
+        let area = Area::new(0, 0, 120, 30); // 3 rows for a 5-row stack
+        let a = Gated::new("A", 10);
+        let b = Gated::new("B", 10);
+        let c = Gated::new("C", 10);
+        let d = Gated::new("D", 10);
+        let e = Gated::new("E", 10);
+        let mut form = Form::new();
+
+        {
+            let fields: [&dyn FormField; 5] = [&a, &b, &c, &d, &e];
+            let mut t = RecordingTarget::new(120, 30);
+            form.view(&mut t, area, &fields);
+            assert_eq!(tag_y(&t, "A"), Some(0));
+        }
+        // Walk the focus down to E: the stack scrolls by 20px under it.
+        {
+            let mut m: [&mut dyn FormField; 5] = [
+                &mut Gated::new("A", 10),
+                &mut Gated::new("B", 10),
+                &mut Gated::new("C", 10),
+                &mut Gated::new("D", 10),
+                &mut Gated::new("E", 10),
+            ];
+            for _ in 0..4 {
+                let _ = form.update(&Msg::Down, &mut m);
+            }
+        }
+        let fields: [&dyn FormField; 5] = [&a, &b, &c, &d, &e];
+        let mut t = RecordingTarget::new(120, 30);
+        form.view(&mut t, area, &fields);
+        assert_eq!(
+            tag_y(&t, "C"),
+            Some(0),
+            "the scrolled stack was not redrawn"
+        );
+        assert_eq!(tag_y(&t, "E"), Some(20));
+    }
+
+    /// The live case behind all of this: a `Picker` whose value decides which
+    /// fields exist under it (Off → nothing, RGB → three sliders, Rainbow →
+    /// one counter). Every switch must repaint the whole form, and the focus
+    /// must stay on the picker that caused it.
+    #[test]
+    fn form_survives_a_picker_driven_field_set() {
+        let area = Area::new(0, 0, 120, 60);
+        let mode = Gated::new("M", 10);
+        let (r, g, b) = (
+            Gated::new("R", 10),
+            Gated::new("G", 10),
+            Gated::new("B", 10),
+        );
+        let speed = Gated::new("S", 10);
+        let mut form = Form::new();
+
+        // Off → RGB → Rainbow → Off, redrawing between each switch.
+        let sets: [&[&dyn FormField]; 4] =
+            [&[&mode], &[&mode, &r, &g, &b], &[&mode, &speed], &[&mode]];
+        for (i, fields) in sets.iter().enumerate() {
+            let mut t = RecordingTarget::new(120, 60);
+            form.view(&mut t, area, fields);
+            assert!(cleared_whole(&t, area), "set {i} did not repaint the form");
+            assert_eq!(tag_y(&t, "M"), Some(0), "set {i}: picker missing");
+            // A second frame with the same set stays quiet.
+            let mut again = RecordingTarget::new(120, 60);
+            form.view(&mut again, area, fields);
+            assert!(!drew_anything(&again), "set {i} repainted twice");
+
+            // The picker keeps the focus across the switch.
+            let mut owned: [&mut dyn FormField; 1] = [&mut Gated::new("M", 10)];
+            let _ = form.update(&Msg::Char('x'), &mut owned);
+            assert_eq!(form.focus_index(), 0, "set {i}: focus moved");
         }
     }
 }
