@@ -96,10 +96,59 @@ struct LayoutStamp {
 /// `Form` holds no references to its fields and carries no lifetime - the field
 /// slice is passed to each call. The currently focused field is highlighted by
 /// its own focused style; `Form` only drives `focus()`/`blur()` as focus moves.
+///
+/// ## Changing the field set on the fly
+///
+/// Because the slice is passed per call, a screen can hand the form a
+/// **different set every event** - which is how a `Picker` reading "Off / RGB /
+/// Rainbow" shows three sliders under itself in one mode and a counter in
+/// another. Build the array the way the state says, and pass it:
+///
+/// ```
+/// # use knurl_core::{Counter, Form, FormField, Msg, Picker, Slider};
+/// # let mut mode = Picker::new("Mode", &["Off", "RGB"]);
+/// # let (mut r, mut g, mut b) = (Slider::new("R"), Slider::new("G"), Slider::new("B"));
+/// # let mut form = Form::new();
+/// # let msg = Msg::Down;
+/// if mode.selected() == 1 {
+///     let mut fields: [&mut dyn FormField; 4] = [&mut mode, &mut r, &mut g, &mut b];
+///     let _ = form.update(&msg, &mut fields);
+/// } else {
+///     let mut fields: [&mut dyn FormField; 1] = [&mut mode];
+///     let _ = form.update(&msg, &mut fields);
+/// }
+/// ```
+///
+/// The form keeps itself consistent across such a change: the focus is clamped
+/// into the new set and the fields are re-synced, so the one that now holds the
+/// focus is told about it and one that was hidden *while* focused does not come
+/// back still highlighted. An edit running on a field that is no longer
+/// editable is dropped, so [`is_editing`](Form::is_editing) - and with it
+/// [`FormZone::traps_focus`](crate::FocusZone::traps_focus) - cannot get stuck
+/// on. An edit on a field that is still there is **kept**: the picker that
+/// drives the set is usually the field being edited, and dropping the edit
+/// would stop the user turning the encoder a second time.
+///
+/// What it cannot do is recognise fields - the focus is a bare index:
+///
+/// - **inserting or removing fields *above* the focused one silently moves the
+///   focus to a different field.** Keep the changing fields *below* the one
+///   that drives them (the natural layout anyway), or call
+///   [`focus_field`](Form::focus_field) yourself after the change to place the
+///   cursor where you mean it;
+/// - an edit that survives the change stays on whatever now sits at that index,
+///   if that field is editable too. Call [`cancel_edit`](Form::cancel_edit) if
+///   the change makes the edit meaningless.
+///
+/// [`view`](Form::view) notices the new layout on its own and repaints the
+/// whole form - see its "Re-layout" section.
 #[derive(Debug)]
 pub struct Form {
     focus: usize,
     editing: bool,
+    /// How many fields the last [`update`](Form::update) was handed - the only
+    /// handle a form holding no references has on "the set changed".
+    seen: usize,
     /// The previous frame's layout, for the re-layout check in
     /// [`view`](Form::view). `Cell` because `view` takes `&self`.
     stamp: Cell<Option<LayoutStamp>>,
@@ -110,6 +159,7 @@ impl Form {
         Self {
             focus: 0,
             editing: false,
+            seen: 0,
             stamp: Cell::new(None),
         }
     }
@@ -158,6 +208,57 @@ impl Form {
         self.sync_focus(fields);
     }
 
+    /// Brings the form back in step with the field set it has just been handed.
+    ///
+    /// Called at the top of [`update`](Form::update), before the event is
+    /// routed - see the "Changing the field set" section on [`Form`] for what
+    /// it can and cannot repair.
+    fn adopt_field_set(&mut self, fields: &mut [&mut dyn FormField]) {
+        let n = fields.len(); // never 0: update() returns early on an empty set
+        let resized = self.seen != n;
+        let clamped = self.focus >= n;
+
+        if clamped {
+            self.focus = n - 1;
+            // The cursor is on a different field than it was, so whatever edit
+            // was running belonged to something that is no longer here.
+            self.editing = false;
+        }
+        // An edit only makes sense on an editable field. If the change slid a
+        // momentary one under the cursor, dropping the flag here is what stops
+        // `is_editing()` - and `FormZone::traps_focus` with it - from holding
+        // the focus inside a form nobody is editing.
+        if self.editing && !fields[self.focus].editable() {
+            self.editing = false;
+            fields[self.focus].set_editing(false);
+        }
+        if resized || clamped {
+            self.seen = n;
+            // Re-drives focus()/blur()/set_editing() across the new set: the
+            // field that now holds the focus gets told, and one that was hidden
+            // while focused does not come back still highlighted.
+            self.sync_focus(fields);
+        }
+    }
+
+    /// Leaves edit mode without moving the focus.
+    ///
+    /// [`focus_field`](Form::focus_field) also drops any edit, but it puts the
+    /// cursor somewhere; this is the way to say "stop editing, stay put" - what
+    /// an `Esc`-like menu entry does, and what a focus container does when it
+    /// hands the focus away
+    /// ([`FocusZone::leave`](crate::FocusZone::leave)). Clearing the fields'
+    /// edit flags on their own would leave [`is_editing`](Form::is_editing) -
+    /// and with it
+    /// [`FormZone::traps_focus`](crate::FocusZone::traps_focus) - reporting an
+    /// edit no field is in.
+    pub fn cancel_edit(&mut self, fields: &mut [&mut dyn FormField]) {
+        self.editing = false;
+        for f in fields.iter_mut() {
+            f.set_editing(false);
+        }
+    }
+
     /// Routes one event through the form and reports its [`Outcome`].
     ///
     /// This is the existing focus container, so it is also the first place the
@@ -175,11 +276,13 @@ impl Form {
     pub fn update(&mut self, msg: &Msg, fields: &mut [&mut dyn FormField]) -> Outcome {
         let n = fields.len();
         if n == 0 {
+            // Nothing to focus and nothing to edit; the next non-empty set
+            // counts as a change and re-syncs.
+            self.editing = false;
+            self.seen = 0;
             return Outcome::Ignored;
         }
-        if self.focus >= n {
-            self.focus = n - 1;
-        }
+        self.adopt_field_set(fields);
         match msg {
             Msg::Select => {
                 if self.editing && fields[self.focus].captures_select_while_editing() {
@@ -461,6 +564,43 @@ mod tests {
     impl FormField for Gated {
         fn height(&self, _t: &dyn RenderTarget) -> u16 {
             self.h.get()
+        }
+    }
+
+    /// A field that records what the form did to it - no widget exposes its
+    /// focus flag, and these tests are about exactly that flag.
+    #[derive(Default)]
+    struct Watch {
+        focused: bool,
+        editing: bool,
+        editable: bool,
+    }
+    impl Watch {
+        fn editable() -> Self {
+            Self {
+                editable: true,
+                ..Self::default()
+            }
+        }
+    }
+    impl Component for Watch {
+        fn update(&mut self, _msg: &Msg) -> Outcome {
+            Outcome::Ignored
+        }
+        fn view(&self, _t: &mut dyn RenderTarget, _a: Area) {}
+        fn focus(&mut self) {
+            self.focused = true;
+        }
+        fn blur(&mut self) {
+            self.focused = false;
+        }
+    }
+    impl FormField for Watch {
+        fn editable(&self) -> bool {
+            self.editable
+        }
+        fn set_editing(&mut self, e: bool) {
+            self.editing = e;
         }
     }
 
@@ -852,6 +992,150 @@ mod tests {
         for msg in [Msg::Up, Msg::Down, Msg::Select] {
             assert_eq!(form.update(&msg, &mut none), Outcome::Ignored);
         }
+    }
+
+    // ── Dynamic field sets ──────────────────────────────────────────────────
+
+    /// Hiding the fields under the cursor clamps the focus - and the clamp used
+    /// to be silent, so the field that now *has* the focus was never told: it
+    /// stayed unhighlighted until the next `Up`/`Down`.
+    #[test]
+    fn shrinking_the_set_under_the_cursor_moves_the_highlight_too() {
+        let mut a = Watch::default();
+        let mut b = Watch::default();
+        let mut c = Watch::default();
+        let mut form = Form::new();
+
+        {
+            let mut all: [&mut dyn FormField; 3] = [&mut a, &mut b, &mut c];
+            form.sync_focus(&mut all);
+            let _ = form.update(&Msg::Down, &mut all);
+            let _ = form.update(&Msg::Down, &mut all);
+        }
+        assert_eq!(form.focus_index(), 2);
+
+        // "Rainbow → Off": the last field is gone. Any event, even one nobody
+        // wants, must leave the form self-consistent.
+        {
+            let mut fewer: [&mut dyn FormField; 2] = [&mut a, &mut b];
+            let _ = form.update(&Msg::Char('x'), &mut fewer);
+        }
+        assert_eq!(form.focus_index(), 1, "focus clamped to the last field");
+        assert!(b.focused, "the field that now holds the focus was not told");
+        assert!(!a.focused);
+    }
+
+    /// The mirror image: a field reappears above the cursor. It was left
+    /// focused when it was hidden (nobody could blur it - it was not in the
+    /// slice), so without a resync two fields draw the focus band.
+    #[test]
+    fn a_field_coming_back_does_not_keep_a_stale_highlight() {
+        let mut a = Watch::default();
+        let mut b = Watch::default();
+        let mut form = Form::new();
+
+        {
+            let mut all: [&mut dyn FormField; 2] = [&mut a, &mut b];
+            form.sync_focus(&mut all);
+            let _ = form.update(&Msg::Down, &mut all); // focus b
+        }
+        assert!(b.focused && !a.focused);
+
+        // `b` is hidden while focused. Nobody can blur it - it is not in the
+        // slice any more - so it keeps the flag until it comes back.
+        {
+            let mut only_a: [&mut dyn FormField; 1] = [&mut a];
+            let _ = form.update(&Msg::Char('x'), &mut only_a);
+        }
+        assert_eq!(form.focus_index(), 0);
+        assert!(a.focused, "the field that now holds the focus was not told");
+
+        // And when it does come back, the form clears it: two fields drawing
+        // the focus band is worse than none.
+        {
+            let mut all: [&mut dyn FormField; 2] = [&mut a, &mut b];
+            let _ = form.update(&Msg::Char('x'), &mut all);
+        }
+        assert!(!b.focused, "a stale focus flag came back with the field");
+        assert!(a.focused, "and the real one is still the only one lit");
+    }
+
+    /// An edit is a claim on one particular field. If the set change slides a
+    /// momentary field under the cursor, the claim is void - and it has to be
+    /// dropped, or `is_editing()` (and with it `FormZone::traps_focus`) stays
+    /// true over a field that cannot be edited at all.
+    #[test]
+    fn an_edit_does_not_ride_onto_a_field_that_cannot_be_edited() {
+        let mut knob = Watch::editable();
+        let mut go = Watch::default();
+        let mut form = Form::new();
+
+        {
+            let mut fields: [&mut dyn FormField; 2] = [&mut knob, &mut go];
+            form.sync_focus(&mut fields);
+            let _ = form.update(&Msg::Select, &mut fields); // edit the knob
+        }
+        assert!(form.is_editing());
+
+        // The knob is hidden; the button slides into index 0 under the cursor.
+        {
+            let mut fields: [&mut dyn FormField; 1] = [&mut go];
+            let _ = form.update(&Msg::Char('x'), &mut fields);
+        }
+        assert!(!form.is_editing(), "the edit rode onto a momentary field");
+        assert!(!go.editing);
+    }
+
+    /// The other half of the same rule: a set change *below* the focused field
+    /// must leave a running edit alone. This is the live case - a `Picker` in
+    /// edit mode is what changes the set, and dropping the edit would stop the
+    /// user turning the encoder a second time.
+    #[test]
+    fn an_edit_on_the_field_driving_the_set_survives_the_change() {
+        let mut mode = Watch::editable();
+        let mut a = Watch::default();
+        let mut b = Watch::default();
+        let mut form = Form::new();
+
+        {
+            let mut fields: [&mut dyn FormField; 1] = [&mut mode];
+            form.sync_focus(&mut fields);
+            let _ = form.update(&Msg::Select, &mut fields);
+        }
+        assert!(form.is_editing());
+
+        // Turning the picker revealed two fields under it.
+        {
+            let mut fields: [&mut dyn FormField; 3] = [&mut mode, &mut a, &mut b];
+            let _ = form.update(&Msg::Up, &mut fields);
+        }
+        assert!(form.is_editing(), "the edit was dropped mid-turn");
+        assert_eq!(form.focus_index(), 0);
+        assert!(mode.focused && mode.editing);
+    }
+
+    // ── cancel_edit ─────────────────────────────────────────────────────────
+
+    /// Leaving a zone by hand used to clear the fields' edit flags but not the
+    /// form's, so `traps_focus()` kept reporting an edit that no field was in.
+    #[test]
+    fn cancel_edit_leaves_the_edit_without_moving_the_focus() {
+        let mut a = Watch::default();
+        let mut knob = Watch::editable();
+        let mut form = Form::new();
+        {
+            let mut fields: [&mut dyn FormField; 2] = [&mut a, &mut knob];
+            form.sync_focus(&mut fields);
+            let _ = form.update(&Msg::Down, &mut fields);
+            let _ = form.update(&Msg::Select, &mut fields);
+            assert!(form.is_editing());
+
+            form.cancel_edit(&mut fields);
+        }
+        assert!(!form.is_editing());
+        assert_eq!(form.focus_index(), 1, "the cursor stayed where it was");
+        assert!(!knob.editing, "the field left edit mode too");
+        assert!(knob.focused, "and kept the focus");
     }
 
     // ── Re-layout × dirty gating ────────────────────────────────────────────
