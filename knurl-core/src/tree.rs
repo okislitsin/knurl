@@ -15,6 +15,14 @@ fn truncate_str(s: &str, max_chars: usize) -> &str {
         .unwrap_or(s)
 }
 
+/// The cursor glyph for a **leaf** row: the same arrowhead `Marker::ARROW` uses
+/// for a list cursor, drawn in the slot a parent's expander would occupy. It is
+/// text rather than a filled shape on purpose - `fill_rect` ignores the style on
+/// monochrome, so a drawn shape would vanish on a focus band, while a glyph
+/// inverts with the row. A pixel target draws a parent's expander as a solid
+/// triangle, so the two do not read alike.
+const LEAF_CURSOR: &str = ">";
+
 // ── TreeItem ────────────────────────────────────────────────────────────────
 
 /// A single node in a [`Tree`], in depth-first order.
@@ -87,6 +95,9 @@ impl<const N: usize> TreeModel for [TreeItem<'_>; N] {
 /// target); each nesting level draws a thin indent guide. Nodes are `Muted`; the
 /// selected one follows the focus language (see [`draw_cursor_band`]) - a
 /// full-width band while the tree holds focus, plain `Normal` when it does not.
+/// A leaf under the cursor gets a marker in its (otherwise empty) expander slot,
+/// so an unfocused tree shows where the cursor is on any row, not only on
+/// parents.
 /// Scrolls (never truncates) and shows the built-in scroll indicator on overflow.
 ///
 /// ## Capacity
@@ -348,13 +359,20 @@ impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
                 target.fill_rect(Area::new(gx, y, 1, line_h), Style::Muted);
             }
 
-            // Expander for parents only (leaves get none).
+            // Expander for parents; for a leaf, the same slot carries the
+            // cursor marker (and only then) - a leaf under the cursor of an
+            // unfocused tree would otherwise be indistinguishable from its
+            // neighbours, since a monochrome theme draws `Normal` and `Muted` in
+            // the same ink. Using the slot the layout already reserves keeps
+            // every row exactly as wide as before.
             if self.has_children(idx) {
                 target.draw_expander(
                     Area::new(base_x, y, cw, line_h),
                     self.is_expanded(idx),
                     style,
                 );
+            } else if idx == self.selected {
+                target.draw_text(base_x, y, LEAF_CURSOR, style);
             }
 
             // Label one expander-slot + gap (2 chars) past the node's base.
@@ -584,6 +602,64 @@ mod tests {
         assert!(
             tx.iter()
                 .any(|(_, y, s, st)| *y == 10 && s == "Sensors" && *st == Style::Muted)
+        );
+    }
+
+    // ── Leaf cursor ───────────────────────────────────────────────────────────
+
+    /// The expander marks the cursor only on rows that *have* children. A leaf
+    /// under the cursor of an unfocused tree used to be indistinguishable from
+    /// its neighbours; it now gets a marker in the same slot, so no width moves.
+    #[test]
+    fn unfocused_tree_marks_a_leaf_cursor() {
+        let mut tree = Tree::new(ITEMS);
+        tree.update(&Msg::Down); // Sensors (parent)
+        tree.update(&Msg::Down); // About (leaf, row 2)
+        assert_eq!(tree.selected_item(), "About");
+
+        let mut t = RecordingTarget::new(160, 80);
+        tree.view(&mut t, Area::new(0, 0, 160, 80));
+        let tx = texts(&t);
+        assert!(bands(&t).is_empty());
+        // The marker sits in the (otherwise empty) expander slot at x = 0.
+        assert!(
+            tx.contains(&(0, 20, ">".into(), Style::Normal)),
+            "no leaf cursor: {tx:?}"
+        );
+        // Rows 0 and 1 are parents, so their slots hold expanders, not markers.
+        assert!(tx.contains(&(0, 0, ">".into(), Style::Muted)));
+        assert!(tx.contains(&(0, 10, ">".into(), Style::Muted)));
+        // (A leaf that is *not* under the cursor keeps an empty slot - see
+        // `tree_initial_shows_roots_only`, which asserts exactly that for this
+        // same "About" row while the cursor sits on "Settings".)
+    }
+
+    /// Focused, that marker is part of the band like everything else on the row.
+    #[test]
+    fn focused_tree_leaf_marker_joins_the_band() {
+        let mut tree = Tree::new(ITEMS);
+        tree.focus();
+        tree.update(&Msg::Down);
+        tree.update(&Msg::Down); // About
+        let mut t = RecordingTarget::new(160, 80);
+        tree.view(&mut t, Area::new(0, 0, 160, 80));
+        assert!(texts(&t).contains(&(0, 20, ">".into(), Style::Focus)));
+        assert_eq!(bands(&t), [(Area::new(0, 20, 160, 10), Style::Focus)]);
+    }
+
+    /// A parent keeps its expander - the marker is only for the rows that had
+    /// nothing in that slot.
+    #[test]
+    fn tree_parent_cursor_still_draws_the_expander() {
+        let tree = Tree::new(ITEMS); // cursor on "Settings", a parent
+        let mut t = RecordingTarget::new(160, 80);
+        tree.view(&mut t, Area::new(0, 0, 160, 80));
+        let tx = texts(&t);
+        assert!(tx.contains(&(0, 0, ">".into(), Style::Normal)));
+        assert_eq!(
+            tx.iter().filter(|(x, y, ..)| *x == 0 && *y == 0).count(),
+            1,
+            "the expander and a marker must not stack in one slot"
         );
     }
 
