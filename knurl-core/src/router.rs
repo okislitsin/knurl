@@ -39,12 +39,36 @@
 //! app treats a Back as "exit". All operations saturate gracefully - popping the
 //! root and pushing past `DEPTH` are bounded no-ops, never panics.
 //!
+//! ## Where the router meets the screens
+//!
+//! With [`Screen`](crate::Screen) the join is three lines and one `match`: the
+//! dispatcher says which screen is current, the screen says what happened in its
+//! own vocabulary, and the application turns that into navigation.
+//!
+//! ```
+//! # use knurl_core::{Msg, Nav, Router, Screen};
+//! # #[derive(Clone, Copy, PartialEq)] enum Page { Menu, Settings }
+//! # enum AppEvent { Open(Page), GoBack }
+//! # struct App { router: Router<Page, 4> }
+//! # impl App {
+//! #     fn screen(&mut self) -> &mut dyn Screen<Event = AppEvent> { unimplemented!() }
+//! fn handle(&mut self, msg: &Msg) {
+//!     let Some(event) = self.screen().update(msg) else { return };
+//!     match event {
+//!         AppEvent::Open(page) => self.router.apply(Nav::Push(page)),
+//!         AppEvent::GoBack => self.router.apply(Nav::Pop),
+//!     }
+//!     self.screen().enter(); // the screen arriving places its focus and repaints
+//! }
+//! # }
+//! ```
+//!
 //! ## Where the router meets the focus chain
 //!
-//! The router knows nothing about focus zones and the
-//! [`FocusChain`](crate::FocusChain) knows nothing about screens - joining them
-//! is the application's `match` on the chain's [`Outcome`](crate::Outcome), and
-//! that match is the same on every screen:
+//! Under a hand-rolled screen (or inside [`Screen::update`](crate::Screen::update),
+//! which is the same thing packaged) the join is the application's `match` on
+//! the chain's [`Outcome`](crate::Outcome), and that match is the same on every
+//! screen:
 //!
 //! - [`Activated`](crate::Outcome::Activated) - the user picked something.
 //!   Ask the widgets *what*: a pressed "< Back" is a [`pop`](Router::pop), a
@@ -89,9 +113,9 @@
 //!     };
 //!     match outcome {
 //!         Outcome::Activated => {
-//!             // Which zone did it? The chain's focus index says - here, the
-//!             // last one, which is where "< Back" always sits.
-//!             if chain.focus_index() == 1 && !router.pop() {
+//!             // Which widget did it? Ask the widget - never the position it
+//!             // happens to sit at.
+//!             if back.take_pressed() && !router.pop() {
 //!                 quit = true; // "Back" at the root means exit
 //!             }
 //!         }
