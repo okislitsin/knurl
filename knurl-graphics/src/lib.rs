@@ -263,6 +263,28 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> GraphicsTarget<'a, D> {
         )
     }
 
+    /// The `(foreground, background)` pair `style` renders in: `(Off, On)` when
+    /// the [`Theme`] inverts it (accounting for the blink phase), `(On, Off)`
+    /// otherwise. Every style-aware primitive resolves its colours through this,
+    /// so an indicator and the label beside it share one highlight.
+    fn mono_pair(&self, style: Style) -> (BinaryColor, BinaryColor) {
+        if self.theme.resolve(style) {
+            (BinaryColor::Off, BinaryColor::On)
+        } else {
+            (BinaryColor::On, BinaryColor::Off)
+        }
+    }
+
+    /// Paints `area` in `bg` - the wash an indicator lays down before its shape,
+    /// the equivalent of the `background_color` a `MonoTextStyle` paints under a
+    /// glyph cell.
+    fn fill_bg(&mut self, area: Area, bg: BinaryColor) {
+        let rect = self.px_rect(area);
+        let _ = rect
+            .into_styled(PrimitiveStyle::with_fill(bg))
+            .draw(self.display);
+    }
+
     /// Access to the underlying `DrawTarget` for pixel-level widget drawing.
     pub fn display_mut(&mut self) -> &mut D {
         self.display
@@ -306,12 +328,7 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
         // simultaneously - the bounding_box() borrow ends here (NLL).
         let pos = self.px_point(x, y);
 
-        let inverted = self.theme.resolve(style);
-        let (text_color, bg_color) = if inverted {
-            (BinaryColor::Off, BinaryColor::On)
-        } else {
-            (BinaryColor::On, BinaryColor::Off)
-        };
+        let (text_color, bg_color) = self.mono_pair(style);
 
         let char_style = MonoTextStyleBuilder::new()
             .font(&self.font)
@@ -394,8 +411,11 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
         let _ = rect.into_styled(style).draw(self.display);
     }
 
-    /// Fill the pixel region solid. Monochrome has no colour, so `style` is
-    /// ignored - the fill is always `On`.
+    /// Fill the pixel region solid. `style` is **deliberately** ignored here -
+    /// the fill is always `On`, unlike the style-aware indicators. Callers
+    /// distinguish two fills by geometry, not colour: the shared scroll
+    /// indicator draws a `Muted` track and a `Focus` thumb that differ only in
+    /// width, and inverting either would make it vanish.
     fn fill_rect(&mut self, area: Area, _style: Style) {
         let rect = self.px_rect(area);
         let style = PrimitiveStyle::with_fill(BinaryColor::On);
@@ -403,9 +423,10 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
     }
 
     /// A smooth pixel bar: a rounded outline track with a solid rounded fill of
-    /// width `fill_permille/1000`. Monochrome has no colour, so `style` is
-    /// ignored - fill and track are both `On` (outline vs solid distinguishes
-    /// them).
+    /// width `fill_permille/1000`. `style` is **deliberately** ignored - track
+    /// and fill are both `On` and read apart by outline vs solid. A `Slider`
+    /// being edited passes `Style::Focus`; inverting on that would paint the
+    /// fill `Off` on an `Off` background and the bar would disappear.
     fn draw_bar(&mut self, area: Area, fill_permille: u16, _style: Style) {
         let cell = self.px_rect(area);
         let (w, h) = (cell.size.width, cell.size.height);
@@ -432,17 +453,21 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
         }
     }
 
-    /// A rounded square checkbox; filled inner square when `on`. Monochrome:
-    /// `style` ignored (always `On`).
-    fn draw_check(&mut self, area: Area, on: bool, _style: Style) {
+    /// A rounded square checkbox; filled inner square when `on`. The cell is
+    /// washed in the `style`'s background and the square drawn in its
+    /// foreground ([`mono_pair`](GraphicsTarget::mono_pair)), so a focused
+    /// indicator inverts along with its label.
+    fn draw_check(&mut self, area: Area, on: bool, style: Style) {
         let (top, s) = indicator_square(self.px_rect(area));
         if s == 0 {
             return;
         }
+        let (fg, bg) = self.mono_pair(style);
+        self.fill_bg(area, bg);
         let bx = Rectangle::new(top, Size::new(s, s));
         let r = corner_radius(bx.size);
         let _ = RoundedRectangle::with_equal_corners(bx, Size::new(r, r))
-            .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+            .into_styled(PrimitiveStyle::with_stroke(fg, 1))
             .draw(self.display);
         if on {
             let inset = (s / 4).max(1);
@@ -453,49 +478,57 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
                 );
                 let ir = corner_radius(inner.size);
                 let _ = RoundedRectangle::with_equal_corners(inner, Size::new(ir, ir))
-                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .into_styled(PrimitiveStyle::with_fill(fg))
                     .draw(self.display);
             }
         }
     }
 
-    /// A circle radio; filled centre dot when `on`. Monochrome: `style` ignored.
-    fn draw_radio(&mut self, area: Area, on: bool, _style: Style) {
+    /// A circle radio; filled centre dot when `on`. Inverts with the `style`,
+    /// like [`draw_check`](RenderTarget::draw_check).
+    fn draw_radio(&mut self, area: Area, on: bool, style: Style) {
         let (top, d) = indicator_square(self.px_rect(area));
         if d == 0 {
             return;
         }
+        let (fg, bg) = self.mono_pair(style);
+        self.fill_bg(area, bg);
         let _ = Circle::new(top, d)
-            .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+            .into_styled(PrimitiveStyle::with_stroke(fg, 1))
             .draw(self.display);
         if on {
             let inset = (d / 4).max(1);
             if d > inset * 2 {
                 let dot = Circle::new(top + Point::new(inset as i32, inset as i32), d - inset * 2);
                 let _ = dot
-                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .into_styled(PrimitiveStyle::with_fill(fg))
                     .draw(self.display);
             }
         }
     }
 
-    /// A filled triangle expander (down = expanded, right = collapsed).
-    /// Monochrome: `style` ignored (always `On`).
-    fn draw_expander(&mut self, area: Area, expanded: bool, _style: Style) {
+    /// A filled triangle expander (down = expanded, right = collapsed). Inverts
+    /// with the `style`, like [`draw_check`](RenderTarget::draw_check).
+    fn draw_expander(&mut self, area: Area, expanded: bool, style: Style) {
         let (top, s) = indicator_square(self.px_rect(area));
         if s == 0 {
             return;
         }
+        let (fg, bg) = self.mono_pair(style);
+        self.fill_bg(area, bg);
         let _ = expander_triangle(top, s, expanded)
-            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+            .into_styled(PrimitiveStyle::with_fill(fg))
             .draw(self.display);
     }
 
     /// Pixel spinner frame (Braille dot matrix / pulsing block); Line-style glyphs
-    /// fall back to text. Monochrome: `style` ignored (always `On`).
+    /// fall back to text. Both paths honour the `style`'s inversion, so one
+    /// spinner does not change look between frame styles.
     fn draw_spinner(&mut self, area: Area, frame: char, style: Style) {
+        let (fg, bg) = self.mono_pair(style);
         let tl = self.px_point(area.x, area.y);
-        if !spinner_pixels(self.display, tl, area, frame, BinaryColor::On) {
+        self.fill_bg(area, bg);
+        if !spinner_pixels(self.display, tl, area, frame, fg) {
             let mut b = [0u8; 4];
             self.draw_text(area.x, area.y, frame.encode_utf8(&mut b), style);
         }
@@ -1294,5 +1327,82 @@ mod tests {
         tgt.fill_rect(Area::new(0, 10, 36, 1), Style::Muted);
         tgt.draw_check(Area::new(0, 12, 12, 10), true, Style::Focus);
         tgt.draw_radio(Area::new(0, 24, 12, 10), true, Style::Focus);
+    }
+
+    // ── Mono pixel tests ────────────────────────────────────────────────────
+
+    /// Which indicator a pixel test drives.
+    #[derive(Debug, Clone, Copy)]
+    enum Ind {
+        Check,
+        Radio,
+        Expander,
+        Braille,
+        Glyph,
+    }
+
+    /// Draws one indicator in `style` into a fresh mock and counts the `On`
+    /// pixels inside `area`.
+    fn mono_on_pixels(ind: Ind, style: Style, area: Area) -> usize {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        let mut disp = MockDisplay::<BinaryColor>::new();
+        // The background wash goes down first, the shape on top.
+        disp.set_allow_overdraw(true);
+        {
+            let mut tgt = GraphicsTarget::new(&mut disp, FONT_6X10);
+            match ind {
+                Ind::Check => tgt.draw_check(area, true, style),
+                Ind::Radio => tgt.draw_radio(area, false, style),
+                Ind::Expander => tgt.draw_expander(area, true, style),
+                Ind::Braille => tgt.draw_spinner(area, '⠋', style),
+                Ind::Glyph => tgt.draw_spinner(area, '/', style),
+            }
+        }
+        let mut on = 0;
+        for y in area.y..area.y + area.h {
+            for x in area.x..area.x + area.w {
+                if disp.get_pixel(Point::new(x as i32, y as i32)) == Some(BinaryColor::On) {
+                    on += 1;
+                }
+            }
+        }
+        on
+    }
+
+    /// A focused indicator must invert exactly like the label beside it: the
+    /// `Focus` rendering is the pixel-for-pixel inverse of the `Normal` one.
+    #[test]
+    fn mono_indicators_invert_under_focus() {
+        let area = Area::new(0, 0, 12, 10);
+        let total = (area.w * area.h) as usize;
+        for ind in [
+            Ind::Check,
+            Ind::Radio,
+            Ind::Expander,
+            Ind::Braille,
+            Ind::Glyph,
+        ] {
+            let normal = mono_on_pixels(ind, Style::Normal, area);
+            let focus = mono_on_pixels(ind, Style::Focus, area);
+            assert!(normal > 0, "{ind:?}: nothing drawn for Style::Normal");
+            assert_ne!(normal, focus, "{ind:?}: Focus renders like Normal");
+            assert_eq!(
+                normal + focus,
+                total,
+                "{ind:?}: Focus is not the inverse of Normal"
+            );
+        }
+    }
+
+    /// A style the theme does not invert (`Muted`) renders like `Normal`.
+    #[test]
+    fn mono_indicator_keeps_non_inverting_styles() {
+        let area = Area::new(0, 0, 12, 10);
+        assert_eq!(
+            mono_on_pixels(Ind::Check, Style::Normal, area),
+            mono_on_pixels(Ind::Check, Style::Muted, area)
+        );
     }
 }
