@@ -327,18 +327,26 @@ pub trait Screen {
     /// Makes the screen current: the cursor goes to its first zone that will
     /// take it, and everything repaints.
     ///
-    /// Called when the screen is opened *and* when it is returned to - it is the
-    /// screen's own entry point, so a screen that resets something on show
-    /// (clearing a text field, re-selecting the first tab) overrides it, calls
-    /// the default, and does that too. A screen with nothing focusable enters
-    /// nobody and still repaints.
+    /// Called when the screen is opened *and* when it is returned to. A screen
+    /// with nothing focusable enters nobody and still repaints.
+    ///
+    /// Override [`on_enter`](Screen::on_enter), not this: a Rust `impl` cannot
+    /// call the default body it replaces, so an override here would silently
+    /// drop the focus placement.
     fn enter(&mut self) {
+        self.on_enter();
         self.zones(&mut |chain, zones| {
             chain.focus_zone(0, Entry::Top, zones);
             chain.mark_dirty(zones);
         });
         self.state().mark_dirty();
     }
+
+    /// Runs at the start of [`enter`](Screen::enter), before the focus is
+    /// placed: where a screen resets what should not survive being left -
+    /// clearing a half-typed name, going back to the first tab. Default: nothing
+    /// to reset.
+    fn on_enter(&mut self) {}
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

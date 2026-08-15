@@ -3,6 +3,10 @@ members = [
     "knurl-core",
     "knurl-graphics",
     "knurl",
+    # The demo application: no_std screens shared by both simulator demos and
+    # built for thumbv6m in CI, which is what makes "copy a screen into your
+    # firmware" a checked promise rather than a claim.
+    "knurl-screens",
     # std desktop simulator - intentionally excluded from default-members below
     # so `cargo build`/`cargo test` from the root never require SDL2. The demos
     # live here as per-target examples (oled, tft), not as a shared crate.
@@ -14,5 +18,6 @@ default-members = [
     "knurl-core",
     "knurl-graphics",
     "knurl",
+    "knurl-screens",
 ]
 resolver = "2"

@@ -1,0 +1,23 @@
+[package]
+name = "knurl-screens"
+version = "0.1.0"
+edition = "2024"
+description = "The knurl demo application - one screen per file, no_std, buildable for bare metal"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/okislitsin/knurl"
+keywords = ["embedded", "tui", "no-std", "demo"]
+categories = ["embedded", "no-std"]
+# The demo application, not a library anyone should depend on.
+publish = false
+
+[dependencies]
+# Only the facade, exactly what firmware depends on: these files are meant to
+# be copied into a device project unchanged, so they may not name knurl-core,
+# knurl-sim or anything else the demo host provides.
+knurl = { path = "../knurl", version = "0.1.3" }
+
+[dev-dependencies]
+# Test-only: the recording target lives behind knurl-core's `mock` feature and
+# has no place in a screen file. Tests are in tests/, not in src/, for the
+# same reason.
+knurl-core = { path = "../knurl-core", version = "0.2.0", features = ["mock"] }

@@ -89,3 +89,11 @@ jobs:
           cargo build -p knurl-graphics --target thumbv6m-none-eabi
           cargo build -p knurl --target thumbv6m-none-eabi
           cargo build -p knurl --features graphics --target thumbv6m-none-eabi
+
+      # The demo's own screens, built for the target they claim to be
+      # copyable to. This is what keeps "take a screen file, drop it in your
+      # firmware" true: the crate depends on the `knurl` facade and nothing
+      # else, so if it links here it has no std, no alloc, and no simulator in
+      # it. A screen that reached for any of those fails this step.
+      - name: Build the demo screens for thumbv6m-none-eabi
+        run: cargo build -p knurl-screens --target thumbv6m-none-eabi
