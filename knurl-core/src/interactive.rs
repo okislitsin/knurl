@@ -1,6 +1,6 @@
 use core::cell::Cell;
 
-use crate::{Area, BorderStyle, Component, FormField, Msg, RenderTarget, Style};
+use crate::{Area, BorderStyle, Component, FormField, Msg, RenderTarget, Style, draw_cursor_band};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -34,13 +34,24 @@ fn fmt_i32(buf: &mut [u8; 12], v: i32) -> &str {
 
 /// Draws `value` right-aligned within `area` (pixels), with `label` on the left
 /// truncated to fit, leaving a one-character gap before the value.
+///
+/// `row` is the style the whole row is drawn in - [`Style::Focus`] on a focus
+/// band, [`Style::Normal`] otherwise (see
+/// [`draw_cursor_band`](crate::draw_cursor_band)); label and value share it, so a
+/// focused row is one block instead of a highlight around the label.
+///
+/// While `editing`, the value **cuts out** of that block: its cell is cleared
+/// back to the screen ground and the value drawn plain on it, so the number
+/// being changed reads as a chip inside the highlight. That is the one edit cue
+/// that survives monochrome - restyling the value cannot say it, because on a
+/// band every style the theme inverts is the same ink.
 fn draw_labeled_value(
     target: &mut dyn RenderTarget,
     area: Area,
     label: &str,
-    label_style: Style,
     value: &str,
-    value_style: Style,
+    row: Style,
+    editing: bool,
 ) {
     let cw = target.char_width().max(1);
     let value_px = target.text_width(value);
@@ -48,12 +59,17 @@ fn draw_labeled_value(
     let label_avail = area.w.saturating_sub(value_px.saturating_add(cw));
     let label_max = (label_avail / cw) as usize;
     if label_max > 0 {
-        target.draw_text(area.x, area.y, truncate(label, label_max), label_style);
+        target.draw_text(area.x, area.y, truncate(label, label_max), row);
     }
 
     if value_px <= area.w {
         let vx = area.x + area.w - value_px;
-        target.draw_text(vx, area.y, value, value_style);
+        if editing {
+            target.clear(Area::new(vx, area.y, value_px, area.h));
+            target.draw_text(vx, area.y, value, Style::Normal);
+        } else {
+            target.draw_text(vx, area.y, value, row);
+        }
     }
 }
 
@@ -121,11 +137,8 @@ impl<'a> Component for Checkbox<'a> {
             return;
         }
         let cw = target.char_width().max(1);
-        let style = if self.focused {
-            Style::Focus
-        } else {
-            Style::Normal
-        };
+        // Focused: the whole row is a band, box included - not just the label.
+        let style = draw_cursor_band(target, area, self.focused);
         let (ind, label_x) = indicator_slot(area, cw);
         target.draw_check(ind, self.checked, style);
 
@@ -222,13 +235,10 @@ impl<'a> Component for Toggle<'a> {
             return;
         }
         let cw = target.char_width().max(1);
-        let style = if self.focused {
-            Style::Focus
-        } else {
-            Style::Normal
-        };
+        let style = draw_cursor_band(target, area, self.focused);
 
-        // Indicator right-aligned (3-char slot); label fills the rest.
+        // Indicator right-aligned (3-char slot); label fills the rest. Both sit
+        // inside the band, so the gap between them is highlighted too.
         let ind_w = 3 * cw;
         if area.w >= ind_w {
             let ind = Area::new(area.x + area.w - ind_w, area.y, ind_w, area.h);
@@ -310,11 +320,7 @@ impl<'a> Component for Button<'a> {
         if area.w == 0 || area.h == 0 {
             return;
         }
-        let style = if self.focused {
-            Style::Focus
-        } else {
-            Style::Normal
-        };
+        let style = draw_cursor_band(target, area, self.focused);
         target.draw_text(area.x, area.y, self.label, style);
     }
 
@@ -428,20 +434,11 @@ impl<'a> Component for Counter<'a> {
         }
         let mut buf = [0u8; 12];
         let value = fmt_i32(&mut buf, self.value);
-        // Focus highlights the label; the value is highlighted only while it is
-        // actually being edited (Form edit mode), so a focused-but-idle row does
-        // not look like it is being changed.
-        let label_style = if self.focused {
-            Style::Focus
-        } else {
-            Style::Normal
-        };
-        let value_style = if self.editing {
-            Style::Focus
-        } else {
-            Style::Normal
-        };
-        draw_labeled_value(target, area, self.label, label_style, value, value_style);
+        // Focus bands the whole row, value included; edit mode then cuts the
+        // value back out of the band, so a focused-but-idle row never looks
+        // like it is being changed.
+        let row = draw_cursor_band(target, area, self.focused);
+        draw_labeled_value(target, area, self.label, value, row, self.editing);
     }
 
     fn focus(&mut self) {
@@ -476,6 +473,10 @@ impl<'a> Component for Counter<'a> {
 /// **Edit-mode cue works on monochrome too:** while editing, a thin 1px frame is
 /// drawn around the bar (the colour fill alone would be invisible on a 1-bit
 /// panel). On colour the fill also switches to `Focus`.
+///
+/// **Focus** bands the row like every other field, except that the band stops
+/// at the bar, which keeps its own ground - see the note in
+/// [`draw`](Slider::draw).
 #[derive(Debug)]
 pub struct Slider<'a> {
     label: &'a str,
@@ -573,11 +574,18 @@ impl<'a> Component for Slider<'a> {
         }
 
         let cw = target.char_width().max(1);
-        let label_style = if self.focused {
-            Style::Focus
-        } else {
-            Style::Normal
-        };
+        // The band stops at the bar - the one field where it does not run the
+        // full row. A monochrome `draw_bar` is ink: it ignores the style on
+        // purpose (Phase 1), so track and fill come out `On` whatever is asked
+        // for, and an inverted band under them would leave `On` on `On`. Giving
+        // the bar its own ground keeps it (and its edit frame) legible, and the
+        // band still ends on a straight column rather than hugging the label
+        // text, so the row does not read as ragged.
+        let label_style = draw_cursor_band(
+            target,
+            Area::new(area.x, area.y, self.label_w.min(area.w), area.h),
+            self.focused,
+        );
         let lw = self.label_w.min(area.w);
         let label_max = (lw / cw) as usize;
         if label_max > 0 {
@@ -737,22 +745,13 @@ impl<'a, T: PickerItem> Component for Picker<'a, T> {
         if area.w == 0 || area.h == 0 {
             return;
         }
-        let label_style = if self.focused {
-            Style::Focus
-        } else {
-            Style::Normal
-        };
         let opt = match self.selected_option() {
             Some(opt) => opt.as_str(),
             None => "",
         };
-        // The option highlights only while editing - mirrors Counter.
-        let opt_style = if self.editing {
-            Style::Focus
-        } else {
-            Style::Normal
-        };
-        draw_labeled_value(target, area, self.label, label_style, opt, opt_style);
+        // Band on focus, option cut back out while editing - mirrors Counter.
+        let row = draw_cursor_band(target, area, self.focused);
+        draw_labeled_value(target, area, self.label, opt, row, self.editing);
     }
 
     fn focus(&mut self) {
@@ -847,6 +846,150 @@ mod tests {
 
     fn has_text(t: &RecordingTarget, want: &str) -> bool {
         texts(t).iter().any(|(_, _, s, _)| s == want)
+    }
+
+    fn bands(t: &RecordingTarget) -> Vec<(Area, Style)> {
+        t.ops()
+            .iter()
+            .filter_map(|op| match op {
+                Op::Band { area, style } => Some((*area, *style)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // ── Focus language (the band across a whole field row) ─────────────────────
+
+    /// Every field that highlights on focus does it the same way: a band across
+    /// the **whole row it was given**, with its indicator and value inside the
+    /// block rather than beside it.
+    #[test]
+    fn focused_fields_band_their_whole_row() {
+        let area = Area::new(0, 0, 120, 10);
+        let expect = [(area, Style::Focus)];
+
+        let mut cb = Checkbox::new("WiFi");
+        cb.focus();
+        let mut t = RecordingTarget::new(120, 10);
+        cb.view(&mut t, area);
+        assert_eq!(bands(&t), expect, "Checkbox");
+        assert!(
+            texts(&t)
+                .iter()
+                .any(|(_, _, s, st)| s == "WiFi" && *st == Style::Focus)
+        );
+
+        let mut tg = Toggle::new("Sound");
+        tg.focus();
+        let mut t = RecordingTarget::new(120, 10);
+        tg.view(&mut t, area);
+        assert_eq!(bands(&t), expect, "Toggle");
+
+        let mut b = Button::new("Go");
+        b.focus();
+        let mut t = RecordingTarget::new(120, 10);
+        b.view(&mut t, area);
+        assert_eq!(bands(&t), expect, "Button");
+
+        let mut c = Counter::new("Vol");
+        c.focus();
+        let mut t = RecordingTarget::new(120, 10);
+        c.view(&mut t, area);
+        assert_eq!(bands(&t), expect, "Counter");
+        // The value is inside the band too - that is the whole point.
+        assert!(
+            texts(&t)
+                .iter()
+                .any(|(_, _, s, st)| s == "0" && *st == Style::Focus)
+        );
+
+        let mut p = Picker::new("Mode", OPTS);
+        p.focus();
+        let mut t = RecordingTarget::new(120, 10);
+        p.view(&mut t, area);
+        assert_eq!(bands(&t), expect, "Picker");
+        assert!(
+            texts(&t)
+                .iter()
+                .any(|(_, _, s, st)| s == "Alpha" && *st == Style::Focus)
+        );
+
+        // The Slider is the one exception - its band stops at the bar; see
+        // `slider_band_stops_at_the_bar`.
+    }
+
+    /// An unfocused field draws no band at all.
+    #[test]
+    fn unfocused_fields_draw_no_band() {
+        let area = Area::new(0, 0, 120, 10);
+        let mut t = RecordingTarget::new(120, 10);
+        Checkbox::new("WiFi").view(&mut t, area);
+        Toggle::new("Sound").view(&mut t, area);
+        Button::new("Go").view(&mut t, area);
+        Counter::new("Vol").view(&mut t, area);
+        Slider::new("Vol").view(&mut t, area);
+        Picker::new("Mode", OPTS).view(&mut t, area);
+        assert!(bands(&t).is_empty());
+    }
+
+    /// The value being edited **cuts out** of the band: its cell is cleared back
+    /// to the screen ground and the number drawn plain on it. A colour swap
+    /// could not say this - on a monochrome band both states are the same ink.
+    #[test]
+    fn edited_value_cuts_out_of_the_band() {
+        let area = Area::new(0, 0, 120, 10);
+        let mut c = Counter::new("Vol").with_value(60);
+        c.focus();
+
+        // Focused, idle: the value sits inside the band, no cut-out.
+        let mut t0 = RecordingTarget::new(120, 10);
+        c.view(&mut t0, area);
+        assert!(
+            texts(&t0)
+                .iter()
+                .any(|(_, _, s, st)| s == "60" && *st == Style::Focus)
+        );
+        assert_eq!(
+            t0.ops()
+                .iter()
+                .filter(|op| matches!(op, Op::Clear { .. }))
+                .count(),
+            1,
+            "only view()'s own clear of the field area"
+        );
+
+        // Editing: the value cell is cleared out of the band and drawn plain.
+        c.set_editing(true);
+        let mut t1 = RecordingTarget::new(120, 10);
+        c.view(&mut t1, area);
+        assert!(
+            texts(&t1)
+                .iter()
+                .any(|(_, _, s, st)| s == "60" && *st == Style::Normal)
+        );
+        // "60" is 12px wide, right-aligned → the cut-out is that cell exactly.
+        assert!(
+            t1.ops().contains(&Op::Clear {
+                area: Area::new(108, 0, 12, 10)
+            }),
+            "the value cell must be cleared out of the band"
+        );
+    }
+
+    /// The slider's band stops at the bar, which keeps its own ground:
+    /// `draw_bar` is ink on monochrome (it ignores the style on purpose), so an
+    /// inverted band under it would leave the bar `On` on `On` - invisible.
+    #[test]
+    fn slider_band_stops_at_the_bar() {
+        let area = Area::new(0, 0, 120, 10);
+        let mut s = Slider::new("Vol").with_range(0, 100).with_value(50);
+        s.focus();
+        let mut t = RecordingTarget::new(120, 10);
+        s.view(&mut t, area);
+
+        // label_w = 48 → the band is x = 0..48, the bar cell x = 48..120.
+        assert_eq!(bands(&t), [(Area::new(0, 0, 48, 10), Style::Focus)]);
+        assert_eq!(bars(&t), [(Area::new(48, 0, 72, 10), 500, Style::Accent)]);
     }
 
     // ── Checkbox ──────────────────────────────────────────────────────────────
@@ -987,8 +1130,8 @@ mod tests {
     }
 
     #[test]
-    fn counter_value_focus_only_when_editing() {
-        // Focused but not editing: value is Normal, label is Focus.
+    fn counter_editing_reads_apart_from_focused() {
+        // Focused but not editing: label and value are both inside the band.
         let mut c = Counter::new("V");
         c.focus();
         let mut t = RecordingTarget::new(120, 10);
@@ -1001,17 +1144,23 @@ mod tests {
         assert!(
             texts(&t)
                 .iter()
-                .any(|(_, _, s, st)| s == "0" && *st == Style::Normal)
+                .any(|(_, _, s, st)| s == "0" && *st == Style::Focus)
         );
 
-        // Editing: value flips to Focus.
+        // Editing: the value cuts back out of the band, so an idle focused row
+        // never looks like it is being changed.
         c.set_editing(true);
         let mut t2 = RecordingTarget::new(120, 10);
         c.view(&mut t2, Area::new(0, 0, 120, 10));
         assert!(
             texts(&t2)
                 .iter()
-                .any(|(_, _, s, st)| s == "0" && *st == Style::Focus)
+                .any(|(_, _, s, st)| s == "0" && *st == Style::Normal)
+        );
+        assert!(
+            texts(&t2)
+                .iter()
+                .any(|(_, _, s, st)| s == "V" && *st == Style::Focus)
         );
     }
 
@@ -1154,15 +1303,22 @@ mod tests {
     }
 
     #[test]
-    fn picker_option_focus_only_when_editing() {
+    fn picker_editing_cuts_the_option_out_of_the_band() {
         let mut p = Picker::new("M", OPTS);
+        p.focus();
         p.set_editing(true);
         let mut t = RecordingTarget::new(120, 10);
         p.view(&mut t, Area::new(0, 0, 120, 10));
+        // Label inside the band, option cut out of it and drawn plain.
         assert!(
             texts(&t)
                 .iter()
-                .any(|(_, _, s, st)| s == "Alpha" && *st == Style::Focus)
+                .any(|(_, _, s, st)| s == "M" && *st == Style::Focus)
+        );
+        assert!(
+            texts(&t)
+                .iter()
+                .any(|(_, _, s, st)| s == "Alpha" && *st == Style::Normal)
         );
     }
 

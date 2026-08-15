@@ -1,6 +1,8 @@
 use core::cell::Cell;
 
-use crate::{Area, Component, Msg, RenderTarget, Style, V_SCROLL_RESERVE, draw_v_scroll};
+use crate::{
+    Area, Component, Msg, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band, draw_v_scroll,
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -82,9 +84,10 @@ impl<const N: usize> TreeModel for [TreeItem<'_>; N] {
 ///
 /// Parent nodes get a pixel expander
 /// ([`draw_expander`](RenderTarget::draw_expander) - triangle on a pixel
-/// target); each nesting level draws a thin indent guide. The selected node is
-/// `Style::Focus`, the rest `Muted`. Scrolls (never truncates) and shows the
-/// built-in scroll indicator on overflow.
+/// target); each nesting level draws a thin indent guide. Nodes are `Muted`; the
+/// selected one follows the focus language (see [`draw_cursor_band`]) - a
+/// full-width band while the tree holds focus, plain `Normal` when it does not.
+/// Scrolls (never truncates) and shows the built-in scroll indicator on overflow.
 ///
 /// ## Capacity
 /// Expansion is a `u64` bitmask, so at most **64 nodes** can be expanded
@@ -315,12 +318,19 @@ impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
             let d = self.model.depth(idx) as u16;
             let base_x = area.x.saturating_add(d.saturating_mul(indent_px));
             let style = if idx == self.selected {
-                Style::Focus
+                draw_cursor_band(
+                    target,
+                    Area::new(area.x, y, content_w, line_h),
+                    self.focused,
+                )
             } else {
                 Style::Muted
             };
 
-            // Indent guides: a thin vertical line at each ancestor level.
+            // Indent guides: a thin vertical line at each ancestor level. Drawn
+            // over the band, so a colour panel keeps them inside the selected
+            // row; on monochrome the band swallows them, which is the point -
+            // the focused row is one block.
             for level in 0..d {
                 let gx = area.x.saturating_add(level.saturating_mul(indent_px));
                 target.fill_rect(Area::new(gx, y, 1, line_h), Style::Muted);
@@ -418,7 +428,8 @@ mod tests {
 
     #[test]
     fn tree_initial_shows_roots_only() {
-        let tree = Tree::new(ITEMS);
+        let mut tree = Tree::new(ITEMS);
+        tree.focus(); // the selected row inverts only for the focused widget
         let mut t = RecordingTarget::new(160, 80); // 8 rows
         tree.view(&mut t, Area::new(0, 0, 160, 80));
         let tx = texts(&t);
@@ -446,6 +457,7 @@ mod tests {
     #[test]
     fn tree_expand_shows_child_with_guide_and_triangle() {
         let mut tree = Tree::new(ITEMS);
+        tree.focus();
         tree.update(&Msg::Select); // expand Settings
         assert!(tree.is_expanded_node(0));
         let mut t = RecordingTarget::new(160, 80);
@@ -489,6 +501,7 @@ mod tests {
     fn tree_scroll_indicator_on_overflow_keeps_focus_visible() {
         // Expand everything visible and constrain to 2 rows so it overflows.
         let mut tree = Tree::new(ITEMS);
+        tree.focus();
         let mut t0 = RecordingTarget::new(160, 20); // 2 rows
         tree.view(&mut t0, Area::new(0, 0, 160, 20)); // page ← 2
         // 3 visible roots > 2 rows → indicator present.
@@ -502,6 +515,49 @@ mod tests {
             texts(&t1)
                 .iter()
                 .any(|(_, _, s, st)| s == "About" && *st == Style::Focus)
+        );
+    }
+
+    // ── Focus language (band vs bare cursor) ───────────────────────────────────
+
+    fn bands(t: &RecordingTarget) -> Vec<(Area, Style)> {
+        t.ops()
+            .iter()
+            .filter_map(|op| match op {
+                Op::Band { area, style } => Some((*area, *style)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A focused tree bands the selected node's whole row - the indent guides and
+    /// the expander live inside the block, not beside it.
+    #[test]
+    fn focused_tree_bands_the_selected_row() {
+        let mut tree = Tree::new(ITEMS);
+        tree.focus();
+        let mut t = RecordingTarget::new(160, 80); // 8 rows, 3 roots → no overflow
+        tree.view(&mut t, Area::new(0, 0, 160, 80));
+
+        assert_eq!(bands(&t), [(Area::new(0, 0, 160, 10), Style::Focus)]);
+        assert!(texts(&t).contains(&(12, 0, "Settings".into(), Style::Focus)));
+    }
+
+    /// An unfocused tree keeps its cursor visible (the row is `Normal` among
+    /// `Muted` ones) without inverting it.
+    #[test]
+    fn unfocused_tree_marks_the_cursor_row_without_a_band() {
+        let tree = Tree::new(ITEMS);
+        let mut t = RecordingTarget::new(160, 80);
+        tree.view(&mut t, Area::new(0, 0, 160, 80));
+
+        assert!(bands(&t).is_empty());
+        let tx = texts(&t);
+        assert!(tx.contains(&(12, 0, "Settings".into(), Style::Normal)));
+        assert!(tx.contains(&(0, 0, ">".into(), Style::Normal))); // its expander
+        assert!(
+            tx.iter()
+                .any(|(_, y, s, st)| *y == 10 && s == "Sensors" && *st == Style::Muted)
         );
     }
 

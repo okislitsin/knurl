@@ -183,8 +183,11 @@ fn main() {
 
     // ── OLED (128x64 mono) ──────────────────────────────────────────────────
 
-    // Root menu - the catalog, with the built-in scroll indicator.
-    let menu = List::new(OLED_MENU);
+    // Root menu - the catalog, with the built-in scroll indicator. The demo
+    // widgets are focused explicitly: the focus band (Phase 2) only shows on the
+    // widget the encoder is driving, and a screenshot has no focus manager yet.
+    let mut menu = List::new(OLED_MENU);
+    menu.focus();
     shoot_mono(128, 64, 4, "oled-menu.png", |t| {
         let body = oled_chrome(t, "knurl OLED");
         menu.view(t, body);
@@ -192,6 +195,7 @@ fn main() {
 
     // List page - selection driven down a few rows.
     let mut list = List::new(LIST_ITEMS);
+    list.focus();
     list.update(&Msg::Down);
     list.update(&Msg::Down);
     shoot_mono(128, 64, 4, "oled-list.png", |t| {
@@ -202,6 +206,7 @@ fn main() {
 
     // Tree page - expand the root and "src" to show nesting.
     let mut tree = Tree::new(TREE_ITEMS);
+    tree.focus();
     tree.update(&Msg::Select); // expand "project"
     tree.update(&Msg::Down);
     tree.update(&Msg::Select); // expand "src"
@@ -235,13 +240,15 @@ fn main() {
 
     // ── TFT (320x240 colour) ────────────────────────────────────────────────
 
-    let tmenu = List::new(TFT_MENU);
+    let mut tmenu = List::new(TFT_MENU);
+    tmenu.focus();
     shoot_color(320, 240, 2, "tft-menu.png", |t| {
         let body = tft_chrome(t, "knurl TFT catalog", "Turn: move   Push: open");
         tmenu.view(t, body);
     });
 
     let mut table = Table::new(&TABLE_ROWS, &TABLE_W).with_headers(TABLE_HEADERS);
+    table.focus();
     table.update(&Msg::Down);
     shoot_color(320, 240, 2, "tft-table.png", |t| {
         let body = tft_chrome(t, "Table", "Turn: move   Push: Back");

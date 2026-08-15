@@ -1,6 +1,9 @@
 use core::cell::Cell;
 
-use crate::{Area, Component, Marker, Msg, RenderTarget, Style, V_SCROLL_RESERVE, draw_v_scroll};
+use crate::{
+    Area, Component, Marker, Msg, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band,
+    draw_v_scroll,
+};
 
 // ── ListModel (data provider) ──────────────────────────────────────────────────
 
@@ -196,8 +199,18 @@ impl<'a, M: ListModel + ?Sized> Component for List<'a, M> {
 
             let y = area.y.saturating_add(row as u16 * line_h);
             let is_sel = item_idx == self.selected;
-            // Charm look: the selected row is Focus, the rest are dimmed (Muted).
-            let style = if is_sel { Style::Focus } else { Style::Muted };
+            // Charm look: the rows around the cursor are dimmed (Muted). The
+            // cursor row itself follows the focus language - a full-width band
+            // when this list holds focus, a plain marked row when it does not.
+            let style = if is_sel {
+                draw_cursor_band(
+                    target,
+                    Area::new(area.x, y, content_w, line_h),
+                    self.focused,
+                )
+            } else {
+                Style::Muted
+            };
             let prefix = if is_sel {
                 self.marker.selected
             } else {
@@ -302,7 +315,8 @@ mod tests {
     #[test]
     fn custom_model_drives_list() {
         let m = Digits;
-        let list = List::new(&m);
+        let mut list = List::new(&m);
+        list.focus(); // the focus band is what makes the selected row Focus
         assert_eq!(list.selected_item(), "one");
         let mut t = RecordingTarget::new(120, 30);
         list.view(&mut t, Area::new(0, 0, 120, 30));
@@ -316,7 +330,8 @@ mod tests {
 
     #[test]
     fn renders_visible_rows_at_pixel_positions() {
-        let list = List::new(ITEMS);
+        let mut list = List::new(ITEMS);
+        list.focus();
         let mut t = RecordingTarget::new(120, 30); // 3 rows visible
         list.view(&mut t, Area::new(0, 0, 120, 30));
 
@@ -339,7 +354,8 @@ mod tests {
 
     #[test]
     fn renders_at_nonzero_origin() {
-        let list = List::new(ITEMS);
+        let mut list = List::new(ITEMS);
+        list.focus();
         let mut t = RecordingTarget::new(200, 60);
         list.view(&mut t, Area::new(20, 10, 120, 30));
         let drawn: Vec<_> = texts(&t).collect();
@@ -352,7 +368,8 @@ mod tests {
 
     #[test]
     fn none_marker_starts_text_at_origin() {
-        let list = List::new(ITEMS).with_marker(Marker::NONE);
+        let mut list = List::new(ITEMS).with_marker(Marker::NONE);
+        list.focus();
         let mut t = RecordingTarget::new(120, 30);
         list.view(&mut t, Area::new(0, 0, 120, 30));
         // No prefix op; text begins at area.x.
@@ -365,11 +382,78 @@ mod tests {
     fn text_truncated_to_pixel_width() {
         // Width 30px, no scrollbar (single item fits): 30/6 = 5 chars; minus the
         // 2-char marker (12px) leaves 18px = 3 chars of text.
-        let list = List::new(&["ABCDEFGH"]);
+        let mut list = List::new(&["ABCDEFGH"]);
+        list.focus();
         let mut t = RecordingTarget::new(30, 10);
         list.view(&mut t, Area::new(0, 0, 30, 10));
         let drawn: Vec<_> = texts(&t).collect();
         assert!(drawn.contains(&(12, 0, "ABC", Style::Focus)));
+    }
+
+    // ── Focus language (band vs bare cursor) ───────────────────────────────────
+
+    fn bands(t: &RecordingTarget) -> impl Iterator<Item = (Area, Style)> + '_ {
+        t.ops().iter().filter_map(|op| match op {
+            Op::Band { area, style } => Some((*area, *style)),
+            _ => None,
+        })
+    }
+
+    /// A focused list bands its selected row across the full content width -
+    /// marker, text and the empty space after it are one block. The band stops
+    /// short of the scroll indicator's reserved column.
+    #[test]
+    fn focused_list_bands_the_selected_row() {
+        let mut list = List::new(ITEMS);
+        list.focus();
+        let mut t = RecordingTarget::new(120, 30); // 3 rows, 5 items → overflow
+        list.view(&mut t, Area::new(0, 0, 120, 30));
+
+        let b: Vec<_> = bands(&t).collect();
+        assert_eq!(
+            b,
+            [(Area::new(0, 0, 120 - V_SCROLL_RESERVE, 10), Style::Focus)],
+            "exactly one band, on the selected row, clear of the scroll column"
+        );
+        // Everything on that row draws in the band's style.
+        let drawn: Vec<_> = texts(&t).collect();
+        assert!(drawn.contains(&(0, 0, "> ", Style::Focus)));
+        assert!(drawn.contains(&(12, 0, "Alpha", Style::Focus)));
+    }
+
+    /// An unfocused list still shows where the cursor sits (the marker is drawn)
+    /// but does not invert: no band, and the row is plain `Normal` against the
+    /// `Muted` rows around it.
+    #[test]
+    fn unfocused_list_shows_the_marker_without_a_band() {
+        let list = List::new(ITEMS);
+        let mut t = RecordingTarget::new(120, 30);
+        list.view(&mut t, Area::new(0, 0, 120, 30));
+
+        assert_eq!(bands(&t).count(), 0, "an unfocused widget must not invert");
+        let drawn: Vec<_> = texts(&t).collect();
+        assert!(drawn.contains(&(0, 0, "> ", Style::Normal)));
+        assert!(drawn.contains(&(12, 0, "Alpha", Style::Normal)));
+        assert!(drawn.contains(&(12, 10, "Beta", Style::Muted)));
+    }
+
+    /// The band follows the cursor, and blurring takes it away again.
+    #[test]
+    fn band_follows_the_selection_and_leaves_on_blur() {
+        let mut list = List::new(ITEMS);
+        list.focus();
+        let mut t0 = RecordingTarget::new(120, 30);
+        list.view(&mut t0, Area::new(0, 0, 120, 30));
+        list.update(&Msg::Down);
+
+        let mut t1 = RecordingTarget::new(120, 30);
+        list.view(&mut t1, Area::new(0, 0, 120, 30));
+        assert_eq!(bands(&t1).map(|(a, _)| a.y).next(), Some(10));
+
+        list.blur();
+        let mut t2 = RecordingTarget::new(120, 30);
+        list.view(&mut t2, Area::new(0, 0, 120, 30));
+        assert_eq!(bands(&t2).count(), 0);
     }
 
     // ── Scrolling - selected always visible ─────────────────────────────────────
@@ -377,6 +461,7 @@ mod tests {
     #[test]
     fn scroll_down_keeps_selection_visible() {
         let mut list = List::new(ITEMS);
+        list.focus();
         let mut t = RecordingTarget::new(120, 30); // 3 rows
         list.view(&mut t, Area::new(0, 0, 120, 30)); // page_size ← 3
 

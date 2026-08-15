@@ -1,4 +1,4 @@
-use crate::{Area, Component, FormField, Msg, RenderTarget, Style};
+use crate::{Area, Component, FormField, Msg, RenderTarget, Style, draw_cursor_band};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -157,35 +157,41 @@ impl<'a, const N: usize> Component for TextInput<'a, N> {
         let cw = target.char_width().max(1);
         let line_h = target.line_height().max(1);
 
-        // Row 0: label + current text. While editing, a 1px underline under the
-        // field + a caret make the active entry state obvious (also on mono).
-        let label_style = if self.focused {
-            Style::Focus
-        } else {
-            Style::Normal
-        };
+        // Row 0: label + current text, banded as one block when focused. The
+        // ribbon row below is deliberately left off the band - its unselected
+        // tokens are `Muted`, which an inverted band would swallow.
+        let row_style = draw_cursor_band(
+            target,
+            Area::new(area.x, area.y, area.w, line_h.min(area.h)),
+            self.focused,
+        );
         let lw = self.label_w.min(area.w);
         if lw > 0 {
             target.draw_text(
                 area.x,
                 area.y,
                 truncate(self.label, (lw / cw) as usize),
-                label_style,
+                row_style,
             );
         }
         let text_x = area.x + self.label_w;
         let avail = area.w.saturating_sub(self.label_w);
         if avail > 0 {
             let text = truncate(self.text(), (avail / cw) as usize);
-            target.draw_text(text_x, area.y, text, Style::Normal);
+            target.draw_text(text_x, area.y, text, row_style);
             if self.editing {
-                target.fill_rect(
-                    Area::new(text_x, area.y + line_h - 1, avail, 1),
-                    Style::Focus,
-                );
+                // The 1px underline is the monochrome edit cue for an *unbanded*
+                // row; on a band it would be the band's own ink on itself, so it
+                // is dropped there and the ribbon carries the cue instead.
+                if !self.focused {
+                    target.fill_rect(
+                        Area::new(text_x, area.y + line_h - 1, avail, 1),
+                        Style::Focus,
+                    );
+                }
                 let caret_x = text_x + target.text_width(text);
                 if caret_x + cw <= area.x + area.w {
-                    target.draw_text(caret_x, area.y, "_", Style::Focus);
+                    target.draw_text(caret_x, area.y, "_", row_style);
                 }
             }
         }
@@ -353,6 +359,52 @@ mod tests {
                 .iter()
                 .any(|op| matches!(op, Op::Fill { area, style: Style::Focus } if area.h == 1))
         );
+    }
+
+    /// A focused text input bands its **first** row only - the label and the
+    /// text typed so far are one block, while the token ribbon below keeps the
+    /// plain ground its `Muted` candidates need to stay readable.
+    #[test]
+    fn textinput_bands_only_its_text_row() {
+        let mut ti = TextInput::<8>::new("Nm").with_charset("ABC").with_window(3);
+        ti.focus();
+        ti.set_editing(true);
+        let area = Area::new(0, 0, 120, 30);
+        let mut t = RecordingTarget::new(120, 30);
+        ti.view(&mut t, area);
+
+        let bands: Vec<_> = t
+            .ops()
+            .iter()
+            .filter_map(|op| match op {
+                Op::Band { area, style } => Some((*area, *style)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bands, [(Area::new(0, 0, 120, 10), Style::Focus)]);
+        // Label and typed text both draw in the band's style.
+        assert!(t.ops().iter().any(|op| matches!(
+            op,
+            Op::Text { text, style: Style::Focus, y: 0, .. } if text == "Nm"
+        )));
+        // The 1px edit underline is dropped on a band - it is drawn in the same
+        // ink as the band on monochrome, so it would be invisible anyway; the
+        // ribbon is the edit cue there.
+        assert!(
+            !t.ops()
+                .iter()
+                .any(|op| matches!(op, Op::Fill { area, .. } if area.h == 1)),
+            "no underline under a band"
+        );
+    }
+
+    /// Unfocused, there is no band and nothing inverts.
+    #[test]
+    fn textinput_unfocused_draws_no_band() {
+        let ti = TextInput::<8>::new("Nm");
+        let mut t = RecordingTarget::new(120, 30);
+        ti.view(&mut t, Area::new(0, 0, 120, 30));
+        assert!(!t.ops().iter().any(|op| matches!(op, Op::Band { .. })));
     }
 
     #[test]

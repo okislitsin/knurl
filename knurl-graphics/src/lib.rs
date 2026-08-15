@@ -1484,6 +1484,68 @@ mod tests {
         );
     }
 
+    /// The focus band, end to end, on a real widget: a focused `List` on a
+    /// monochrome panel must draw its selected row as a **solid block** - far
+    /// more lit than the row below it, and with no gap running down its right
+    /// side where the text ran out. An unfocused list must not invert anything.
+    #[test]
+    fn mono_focused_list_row_is_a_solid_block() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+        use knurl_core::{Component, List};
+
+        const ITEMS: &[&str] = &["Alpha", "Beta", "Gamma"];
+        let area = Area::new(0, 0, 60, 30); // 3 rows of FONT_6X10
+
+        // Lit pixels per row, for a list that is (or is not) focused.
+        let rows = |focused: bool| {
+            let mut disp = MockDisplay::<BinaryColor>::new();
+            disp.set_allow_overdraw(true);
+            {
+                let mut list = List::new(ITEMS);
+                if focused {
+                    list.focus();
+                }
+                let mut tgt = GraphicsTarget::new(&mut disp, FONT_6X10);
+                list.view(&mut tgt, area);
+            }
+            let mut per_row = [0usize; 3];
+            for (r, count) in per_row.iter_mut().enumerate() {
+                for y in (r as i32 * 10)..(r as i32 * 10 + 10) {
+                    for x in 0..area.w as i32 {
+                        if disp.get_pixel(Point::new(x, y)) == Some(BinaryColor::On) {
+                            *count += 1;
+                        }
+                    }
+                }
+            }
+            per_row
+        };
+
+        let focused = rows(true);
+        let plain = rows(false);
+        let row_px = (area.w * 10) as usize;
+
+        // The banded row is nearly the whole row lit; the glyphs are the holes.
+        assert!(
+            focused[0] * 10 > row_px * 8,
+            "selected row not a block: {}/{row_px} lit",
+            focused[0]
+        );
+        // …and it stands far apart from the unselected row below it.
+        assert!(
+            focused[0] > focused[1] * 4,
+            "selected {} vs next {} - not a clear difference",
+            focused[0],
+            focused[1]
+        );
+        // Unfocused: no inversion anywhere, just glyph ink on every row.
+        for (r, lit) in plain.iter().enumerate() {
+            assert!(*lit * 10 < row_px * 5, "row {r} inverted while unfocused");
+        }
+        assert!(plain[0] > 0, "the cursor row must still be drawn");
+    }
+
     /// A style the theme does not invert (`Muted`) renders like `Normal`.
     #[test]
     fn mono_indicator_keeps_non_inverting_styles() {

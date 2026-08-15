@@ -17,12 +17,17 @@ fn truncate(s: &str, max: usize) -> &str {
 /// Keys are drawn `Style::Accent` on the left, actions `Style::Muted` on the
 /// right. `Up`/`Down` scroll (no selection). All text is ASCII; a built-in pixel
 /// scroll indicator appears on overflow.
+///
+/// ## Focus
+/// Like [`Pager`](crate::Pager), a cheat sheet has **no cursor** - there is
+/// nothing for the focus band (see [`draw_cursor_band`](crate::draw_cursor_band))
+/// to sit under - so it keeps no `focused` flag and leaves `focus()`/`blur()` at
+/// the trait's no-ops.
 #[derive(Debug)]
 pub struct Help<'a> {
     items: &'a [(&'a str, &'a str)],
     key_w: u16,
     offset: usize,
-    focused: bool,
     page_size: Cell<usize>,
 }
 
@@ -32,7 +37,6 @@ impl<'a> Help<'a> {
             items,
             key_w: 48, // key column width, in pixels (≈8 chars)
             offset: 0,
-            focused: false,
             page_size: Cell::new(usize::MAX),
         }
     }
@@ -108,14 +112,6 @@ impl<'a> Component for Help<'a> {
             sb.set(n, rows, self.offset);
             sb.view(target, Area::new(area.x + area.w - 3, area.y, 3, area.h));
         }
-    }
-
-    fn focus(&mut self) {
-        self.focused = true;
-    }
-
-    fn blur(&mut self) {
-        self.focused = false;
     }
 }
 

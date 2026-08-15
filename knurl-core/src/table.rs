@@ -1,6 +1,8 @@
 use core::cell::Cell;
 
-use crate::{Area, Component, Msg, RenderTarget, Style, V_SCROLL_RESERVE, draw_v_scroll};
+use crate::{
+    Area, Component, Msg, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band, draw_v_scroll,
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -59,8 +61,10 @@ impl<const R: usize, const C: usize> TableModel for [[&str; C]; R] {
 ///
 /// Renders as a real pixel grid: fixed column widths, **1px vertical column
 /// separators** and a **1px header underline** (via `fill_rect`) - no `|`/`-`
-/// characters. The selected row is `Style::Focus`, the header `Accent`, other
-/// rows `Normal`. Scrolls (never truncates) with the built-in scroll indicator.
+/// characters. The header is `Accent` and the rows `Muted`; the selected row
+/// follows the focus language (see [`draw_cursor_band`]) - a full-width band
+/// while the table holds focus, plain `Normal` when it does not. Scrolls (never
+/// truncates) with the built-in scroll indicator.
 pub struct Table<'a, M: TableModel + ?Sized> {
     model: &'a M,
     headers: Option<&'a [&'a str]>,
@@ -212,10 +216,17 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
                 break;
             }
             let y = area.y + header_h + row as u16 * line_h;
+            // The cursor row follows the focus language (band when focused, plain
+            // when not); the rest are dimmed so the cursor still reads on an
+            // unfocused table, which has no marker column to fall back on.
             let style = if idx == self.selected {
-                Style::Focus
+                draw_cursor_band(
+                    target,
+                    Area::new(area.x, y, content_right.saturating_sub(area.x), line_h),
+                    self.focused,
+                )
             } else {
-                Style::Normal
+                Style::Muted
             };
             self.draw_cells(target, area, y, idx, style);
         }
@@ -300,7 +311,8 @@ mod tests {
 
     #[test]
     fn table_selected_row_is_focus() {
-        let table = Table::new(ROWS, WIDTHS).with_headers(HEADERS);
+        let mut table = Table::new(ROWS, WIDTHS).with_headers(HEADERS);
+        table.focus();
         let mut t = RecordingTarget::new(80, 50);
         table.view(&mut t, Area::new(0, 0, 80, 50));
         // Row 0 selected by default → "Alpha" at y = 10 (after header) in Focus.
@@ -309,11 +321,11 @@ mod tests {
                 .iter()
                 .any(|(x, y, s, st)| *x == 0 && *y == 10 && s == "Alpha" && *st == Style::Focus)
         );
-        // Row 1 not selected → Normal.
+        // Row 1 not selected → dimmed.
         assert!(
             texts(&t)
                 .iter()
-                .any(|(_, y, s, st)| *y == 20 && s == "Beta" && *st == Style::Normal)
+                .any(|(_, y, s, st)| *y == 20 && s == "Beta" && *st == Style::Muted)
         );
     }
 
@@ -340,6 +352,7 @@ mod tests {
     fn table_scrolls_and_shows_indicator() {
         // 3 rows, only 2 data rows fit (no header) → overflow.
         let mut table = Table::new(ROWS, WIDTHS);
+        table.focus();
         let mut t = RecordingTarget::new(80, 20); // 2 rows
         table.view(&mut t, Area::new(0, 0, 80, 20)); // page ← 2
         assert!(fills(&t).iter().any(|(_, st)| *st == Style::Focus)); // thumb present
@@ -354,6 +367,68 @@ mod tests {
             texts(&t2)
                 .iter()
                 .any(|(_, _, s, st)| s == "Gamma" && *st == Style::Focus)
+        );
+    }
+
+    // ── Focus language (band vs bare cursor) ───────────────────────────────────
+
+    fn bands(t: &RecordingTarget) -> Vec<(Area, Style)> {
+        t.ops()
+            .iter()
+            .filter_map(|op| match op {
+                Op::Band { area, style } => Some((*area, *style)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A focused table bands its selected row across the content width (clear of
+    /// the scroll column), below the header, with the cells in the band's style.
+    #[test]
+    fn focused_table_bands_the_selected_row() {
+        let mut table = Table::new(ROWS, WIDTHS).with_headers(HEADERS);
+        table.focus();
+        let mut t = RecordingTarget::new(80, 50); // header + 4 rows, no overflow
+        table.view(&mut t, Area::new(0, 0, 80, 50));
+
+        assert_eq!(bands(&t), [(Area::new(0, 10, 80, 10), Style::Focus)]);
+        assert!(
+            texts(&t)
+                .iter()
+                .any(|(_, y, s, st)| *y == 10 && s == "Alpha" && *st == Style::Focus)
+        );
+    }
+
+    /// An unfocused table marks its cursor row by contrast alone - `Normal`
+    /// against the `Muted` rows around it - and never inverts.
+    #[test]
+    fn unfocused_table_marks_the_cursor_row_without_a_band() {
+        let table = Table::new(ROWS, WIDTHS).with_headers(HEADERS);
+        let mut t = RecordingTarget::new(80, 50);
+        table.view(&mut t, Area::new(0, 0, 80, 50));
+
+        assert!(bands(&t).is_empty());
+        let tx = texts(&t);
+        assert!(
+            tx.iter()
+                .any(|(_, y, s, st)| *y == 10 && s == "Alpha" && *st == Style::Normal)
+        );
+        assert!(
+            tx.iter()
+                .any(|(_, y, s, st)| *y == 20 && s == "Beta" && *st == Style::Muted)
+        );
+    }
+
+    /// With the scroll indicator up, the band stops short of its column.
+    #[test]
+    fn table_band_clears_the_scroll_column() {
+        let mut table = Table::new(ROWS, WIDTHS);
+        table.focus();
+        let mut t = RecordingTarget::new(80, 20); // 2 rows for 3 → overflow
+        table.view(&mut t, Area::new(0, 0, 80, 20));
+        assert_eq!(
+            bands(&t),
+            [(Area::new(0, 0, 80 - V_SCROLL_RESERVE, 10), Style::Focus)]
         );
     }
 

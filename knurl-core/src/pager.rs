@@ -126,11 +126,18 @@ fn char_slice(s: &str, start: usize, end: usize) -> &str {
 ///   `Down` to the bottom re-engages it.
 ///
 /// All state is stack-only (offset, follow flag, cached page/wrap dimensions).
+///
+/// ## Focus
+/// A pager has **no cursor** - it scrolls, it does not select - so the focus
+/// language (a band under the cursor row, see
+/// [`draw_cursor_band`](crate::draw_cursor_band)) has nothing to highlight here,
+/// and the widget keeps no `focused` flag: `focus()`/`blur()` are the trait's
+/// no-ops. Which widget the encoder drives is the composing screen's business,
+/// and it is the composition layer that will show it.
 pub struct Pager<'a, M: LinesModel + ?Sized = [&'a str]> {
     model: &'a M,
     offset: usize,
     follow: bool,
-    focused: bool,
     // Cached from view() so the next update() can clamp/tail without the target.
     page_rows: Cell<usize>,
     wrap_cols: Cell<usize>,
@@ -142,7 +149,6 @@ impl<'a, M: LinesModel + ?Sized> Pager<'a, M> {
             model,
             offset: 0,
             follow: false,
-            focused: false,
             page_rows: Cell::new(usize::MAX),
             wrap_cols: Cell::new(usize::MAX),
         }
@@ -310,14 +316,6 @@ impl<'a, M: LinesModel + ?Sized> Component for Pager<'a, M> {
             sb.set(total, rows, before);
             sb.view(target, Area::new(area.x + area.w - 3, area.y, 3, area.h));
         }
-    }
-
-    fn focus(&mut self) {
-        self.focused = true;
-    }
-
-    fn blur(&mut self) {
-        self.focused = false;
     }
 }
 
