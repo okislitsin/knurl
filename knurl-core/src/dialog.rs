@@ -25,6 +25,9 @@ pub struct Dialog<'a> {
     buttons: &'a [&'a str],
     selected: usize,
     border: BorderStyle,
+    /// Armed by `Select`, cleared by [`take_confirmed`](Dialog::take_confirmed) -
+    /// the modal's answer to "was it *this* that the user activated?".
+    confirmed: bool,
     // Repaint gate: set on button-selection change. A modal also needs a full
     // repaint when it opens (it draws over screen content) - the app calls
     // [`mark_dirty`](Component::mark_dirty) then.
@@ -39,6 +42,7 @@ impl<'a> Dialog<'a> {
             buttons,
             selected: 0,
             border: BorderStyle::Rounded,
+            confirmed: false,
             dirty: Cell::new(true),
         }
     }
@@ -72,6 +76,17 @@ impl<'a> Dialog<'a> {
     pub fn selected_button(&self) -> &'a str {
         self.buttons.get(self.selected).copied().unwrap_or("")
     }
+
+    /// Whether the dialog was confirmed since the last call, clearing the flag
+    /// so one press closes the modal exactly once.
+    ///
+    /// The screen asks the dialog, the same way it asks a
+    /// [`Button`](crate::Button::take_pressed): the [`Outcome`] says an event
+    /// was spent, this says the modal is the thing that spent it. Pair it with
+    /// [`selected_button`](Dialog::selected_button) for *which* answer.
+    pub fn take_confirmed(&mut self) -> bool {
+        core::mem::take(&mut self.confirmed)
+    }
 }
 
 impl<'a> Component for Dialog<'a> {
@@ -90,8 +105,11 @@ impl<'a> Component for Dialog<'a> {
             }
             // Confirm changes no on-screen pixels of the dialog itself - so no
             // dirty - but it is precisely the moment the app acts on: it reads
-            // `selected_button()` and closes the modal.
-            Msg::Select => Outcome::Activated,
+            // `take_confirmed()` / `selected_button()` and closes the modal.
+            Msg::Select => {
+                self.confirmed = true;
+                Outcome::Activated
+            }
             // Either end of the button row, or a message that is not ours.
             _ => Outcome::Ignored,
         }
@@ -401,6 +419,8 @@ mod tests {
         assert_eq!(d.selected(), 0);
         assert_eq!(d.update(&Msg::Select), Outcome::Activated);
         assert_eq!(d.selected_button(), "Yes", "and it says which button");
+        assert!(d.take_confirmed(), "and that it was the dialog that did it");
+        assert!(!d.take_confirmed(), "the read consumed the confirmation");
     }
 
     #[test]

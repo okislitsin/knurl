@@ -315,18 +315,37 @@ impl<'a> Component for Toggle<'a> {
 // ── Button ──────────────────────────────────────────────────────────────────
 
 /// A focusable, momentary action item: [`Msg::Select`] on it reports
-/// [`Activated`](Outcome::Activated).
+/// [`Activated`](Outcome::Activated) **and** arms a one-shot flag the screen
+/// reads with [`take_pressed`](Button::take_pressed).
 ///
-/// Unlike [`Checkbox`]/[`Toggle`], a `Button` carries no state at all - the
-/// press *is* the outcome of the event, so nothing is latched and there is
-/// nothing to poll. Which button was pressed is a question for the container
-/// that routed the event: [`FocusChain::focus_index`](crate::FocusChain::focus_index)
-/// for a screen's zones, [`Form::focus_index`](crate::Form::focus_index) for a
-/// form's fields.
+/// The two answer different questions. The [`Outcome`] says *that* an event was
+/// spent, which is what a container needs to stop routing it; `take_pressed`
+/// says *who* spent it, which is what the screen above needs:
+///
+/// ```
+/// # use knurl_core::{Button, Component, Msg};
+/// # let mut back = Button::new("< Back");
+/// # let _ = back.update(&Msg::Select);
+/// if back.take_pressed() {
+///     // return Some(AppEvent::GoBack);
+/// }
+/// ```
+///
+/// Asking the button beats deriving the answer from a position ("the last zone
+/// is Back"): the identity is written where the screen already names the
+/// widget, and it survives a field being inserted above it.
+///
+/// The flag is cleared by reading it ([`core::mem::take`]), so one press is
+/// reported once, and it is **not** state the button draws - a press changes no
+/// pixel.
 #[derive(Debug)]
 pub struct Button<'a> {
     label: &'a str,
     focused: bool,
+    /// Armed by `Select`, cleared by [`take_pressed`](Button::take_pressed).
+    /// Deliberately not part of the picture: see the note on
+    /// [`update`](Component::update) below.
+    pressed: bool,
     dirty: Cell<bool>,
 }
 
@@ -335,16 +354,25 @@ impl<'a> Button<'a> {
         Self {
             label,
             focused: false,
+            pressed: false,
             dirty: Cell::new(true),
         }
+    }
+
+    /// Whether the button was pressed since the last call, clearing the flag so
+    /// a single press can never be read twice.
+    pub fn take_pressed(&mut self) -> bool {
+        core::mem::take(&mut self.pressed)
     }
 }
 
 impl<'a> Component for Button<'a> {
     fn update(&mut self, msg: &Msg) -> Outcome {
         if let Msg::Select = msg {
-            // No dirty: a press changes no pixel of the button, it is the
-            // event's outcome and nothing else.
+            // Armed, but not dirtied: `pressed` is a question the screen asks
+            // once, not something the button renders, so a press changes no
+            // pixel of it.
+            self.pressed = true;
             return Outcome::Activated;
         }
         // A button has nowhere to move: Up/Down belong to the focus container.
@@ -1156,8 +1184,19 @@ mod tests {
         );
     }
 
-    /// A press draws nothing - it is the event's outcome, not a state the
-    /// button renders - so it must not dirty the gate either.
+    /// One press is reported once: the flag is armed by `Select` and cleared by
+    /// the read, so a screen cannot act on the same press twice.
+    #[test]
+    fn button_select_arms_take_pressed_and_reading_clears_it() {
+        let mut b = Button::new("Go");
+        assert!(!b.take_pressed(), "nothing pressed yet");
+        assert_eq!(b.update(&Msg::Select), Outcome::Activated);
+        assert!(b.take_pressed());
+        assert!(!b.take_pressed(), "the read consumed it");
+    }
+
+    /// A press draws nothing - it is the event's outcome plus a flag the screen
+    /// reads, not a state the button renders - so it must not dirty the gate.
     #[test]
     fn button_press_does_not_dirty() {
         let mut b = Button::new("Go");
@@ -1434,14 +1473,16 @@ mod tests {
 
     // ── Outcome (event routing) ─────────────────────────────────────────────
 
-    /// A button is the plainest `Activated` there is - and, since the latch
-    /// went, the only way it reports a press.
+    /// A button is the plainest `Activated` there is: the outcome says the
+    /// event was spent, the flag says by whom.
     #[test]
     fn button_activates_on_select_and_owns_nothing_else() {
         let mut b = Button::new("Go");
         assert_eq!(b.update(&Msg::Up), Outcome::Ignored);
         assert_eq!(b.update(&Msg::Down), Outcome::Ignored);
+        assert!(!b.take_pressed(), "an ignored event is not a press");
         assert_eq!(b.update(&Msg::Select), Outcome::Activated);
+        assert!(b.take_pressed(), "...and the screen can ask who it was");
     }
 
     /// Flipping itself is internal state, not an app-level action.
