@@ -1,6 +1,6 @@
 use core::cell::Cell;
 
-use crate::{Area, Component, Msg, RenderTarget, Style, draw_v_scroll};
+use crate::{Area, Component, Msg, Outcome, RenderTarget, Style, draw_v_scroll};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -98,15 +98,20 @@ impl Default for Spinner {
 }
 
 impl Component for Spinner {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
+        // The one widget that lives off `Tick`: a tick it can spin on is used
+        // up here. Everything else - including a tick with no frames to cycle -
+        // stays available to whoever is next.
         if let Msg::Tick = msg {
             let n = self.style.frames().chars().count();
             if n > 0 {
                 self.frame = (self.frame + 1) % n;
                 // A tick that advances the frame is a visible change → repaint.
                 self.dirty.set(true);
+                return Outcome::Consumed;
             }
         }
+        Outcome::Ignored
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
@@ -188,8 +193,9 @@ impl Default for ProgressBar {
 }
 
 impl Component for ProgressBar {
-    fn update(&mut self, _msg: &Msg) {
-        // Driven externally via set_value().
+    fn update(&mut self, _msg: &Msg) -> Outcome {
+        // Driven externally via set_value(), so no event is ever ours.
+        Outcome::Ignored
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
@@ -237,8 +243,9 @@ impl Default for LineGauge {
 }
 
 impl Component for LineGauge {
-    fn update(&mut self, _msg: &Msg) {
-        // Driven externally via set_value().
+    fn update(&mut self, _msg: &Msg) -> Outcome {
+        // Driven externally via set_value(), so no event is ever ours.
+        Outcome::Ignored
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
@@ -316,8 +323,9 @@ impl Default for Scrollbar {
 }
 
 impl Component for Scrollbar {
-    fn update(&mut self, _msg: &Msg) {
-        // Driven externally via set().
+    fn update(&mut self, _msg: &Msg) -> Outcome {
+        // Driven externally via set(), so no event is ever ours.
+        Outcome::Ignored
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
@@ -388,11 +396,20 @@ impl Paginator {
 }
 
 impl Component for Paginator {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
+        // Left/Right walk the dots and stop at the ends (the encoder never
+        // sends them; a keyboard does). A step that lands on a new page is
+        // used up, the first/last page is an edge like any other.
+        let before = self.current;
         match msg {
             Msg::Right => self.next(),
             Msg::Left => self.prev(),
-            _ => {}
+            _ => return Outcome::Ignored,
+        }
+        if self.current != before {
+            Outcome::Consumed
+        } else {
+            Outcome::Ignored
         }
     }
 
@@ -490,7 +507,7 @@ mod tests {
         s.view(&mut t, Area::new(0, 0, 40, 10));
         assert_eq!(t.first_text(), Some((0, 0, "|", Style::Accent)));
 
-        s.update(&Msg::Tick);
+        let _ = s.update(&Msg::Tick);
         let mut t2 = RecordingTarget::new(40, 10);
         s.view(&mut t2, Area::new(0, 0, 40, 10));
         assert_eq!(t2.first_text(), Some((0, 0, "/", Style::Accent)));
@@ -508,8 +525,8 @@ mod tests {
     #[test]
     fn spinner_wraps_frames() {
         let mut s = Spinner::new().with_style(SpinnerStyle::Meter); // 2 frames
-        s.update(&Msg::Tick);
-        s.update(&Msg::Tick); // wraps back to frame 0
+        let _ = s.update(&Msg::Tick);
+        let _ = s.update(&Msg::Tick); // wraps back to frame 0
         let mut t = RecordingTarget::new(40, 10);
         s.view(&mut t, Area::new(0, 0, 40, 10));
         assert_eq!(t.first_text(), Some((0, 0, "▰", Style::Accent)));
@@ -532,11 +549,11 @@ mod tests {
         assert!(!s.dirty());
 
         // A non-Tick message is a no-op → stays clean.
-        s.update(&Msg::Select);
+        let _ = s.update(&Msg::Select);
         assert!(!s.dirty());
 
         // A Tick advances the frame → dirty (the animation needs a repaint).
-        s.update(&Msg::Tick);
+        let _ = s.update(&Msg::Tick);
         assert!(s.dirty());
     }
 
@@ -659,10 +676,10 @@ mod tests {
     #[test]
     fn paginator_next_prev_clamp_and_arrows() {
         let mut p = Paginator::new(3);
-        p.update(&Msg::Right);
+        let _ = p.update(&Msg::Right);
         assert_eq!(p.current(), 1);
-        p.update(&Msg::Left);
-        p.update(&Msg::Left);
+        let _ = p.update(&Msg::Left);
+        let _ = p.update(&Msg::Left);
         assert_eq!(p.current(), 0);
         p.set_current(2);
         p.next();

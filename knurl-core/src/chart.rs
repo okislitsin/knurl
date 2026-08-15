@@ -1,4 +1,4 @@
-use crate::{Area, Component, Msg, RenderTarget, Style};
+use crate::{Area, Component, Msg, Outcome, RenderTarget, Style};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -121,8 +121,9 @@ impl<'a, M: BarChartModel + ?Sized> BarChart<'a, M> {
 }
 
 impl<'a, M: BarChartModel + ?Sized> Component for BarChart<'a, M> {
-    fn update(&mut self, _msg: &Msg) {
-        // Driven by its data.
+    fn update(&mut self, _msg: &Msg) -> Outcome {
+        // Driven by its data, never by events.
+        Outcome::Ignored
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {

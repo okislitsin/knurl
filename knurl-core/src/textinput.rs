@@ -1,6 +1,6 @@
 use core::cell::Cell;
 
-use crate::{Area, Component, FormField, Msg, RenderTarget, Style, draw_cursor_band};
+use crate::{Area, Component, FormField, Msg, Outcome, RenderTarget, Style, draw_cursor_band};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -145,14 +145,24 @@ impl<'a, const N: usize> TextInput<'a, N> {
 }
 
 impl<'a, const N: usize> Component for TextInput<'a, N> {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
         let tc = self.token_count(); // always >= 2
         // A Select on a full buffer, or a backspace on an empty one, is a no-op:
         // comparing the three pieces of state afterwards catches both.
         let before = (self.candidate, self.len, self.done);
-        match msg {
-            Msg::Down => self.candidate = (self.candidate + 1) % tc,
-            Msg::Up => self.candidate = (self.candidate + tc - 1) % tc,
+        // The ribbon is a **ring** - it has no first or last token - so Up/Down
+        // always land somewhere new and never hand the event back. That is the
+        // one navigable widget here without edges, and it is deliberate: the
+        // way out of the ribbon is the `done` token, not running off its end.
+        let outcome = match msg {
+            Msg::Down => {
+                self.candidate = (self.candidate + 1) % tc;
+                Outcome::Consumed
+            }
+            Msg::Up => {
+                self.candidate = (self.candidate + tc - 1) % tc;
+                Outcome::Consumed
+            }
             Msg::Select => {
                 let cl = self.charset_len();
                 if self.candidate < cl {
@@ -161,19 +171,27 @@ impl<'a, const N: usize> Component for TextInput<'a, N> {
                         self.buf[self.len] = c as u8; // ASCII
                         self.len += 1;
                     }
+                    // A full buffer swallows the keystroke rather than passing
+                    // it on: mid-edit, Select belongs to the ribbon either way.
+                    Outcome::Consumed
                 } else if self.candidate == cl {
                     if self.len > 0 {
                         self.len -= 1; // backspace
                     }
+                    Outcome::Consumed
                 } else {
                     self.done = true; // done
+                    // "Done" is the field's own activation - the form leaves
+                    // edit mode (editing_finished) and the app reads text().
+                    Outcome::Activated
                 }
             }
-            _ => {}
-        }
+            _ => Outcome::Ignored,
+        };
         if (self.candidate, self.len, self.done) != before {
             self.dirty.set(true);
         }
+        outcome
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
@@ -339,21 +357,21 @@ mod tests {
     #[test]
     fn textinput_type_scroll_backspace() {
         let mut ti = TextInput::<8>::new("X").with_charset("AB");
-        ti.update(&Msg::Select); // 'A'
+        let _ = ti.update(&Msg::Select); // 'A'
         assert_eq!(ti.text(), "A");
-        ti.update(&Msg::Down); // candidate → 'B'
-        ti.update(&Msg::Select);
+        let _ = ti.update(&Msg::Down); // candidate → 'B'
+        let _ = ti.update(&Msg::Select);
         assert_eq!(ti.text(), "AB");
-        ti.update(&Msg::Down); // candidate → backspace token
-        ti.update(&Msg::Select);
+        let _ = ti.update(&Msg::Down); // candidate → backspace token
+        let _ = ti.update(&Msg::Select);
         assert_eq!(ti.text(), "A");
     }
 
     #[test]
     fn textinput_done() {
         let mut ti = TextInput::<8>::new("X").with_charset("AB");
-        ti.update(&Msg::Up); // candidate → done ((0 + 4 - 1) % 4 = 3)
-        ti.update(&Msg::Select);
+        let _ = ti.update(&Msg::Up); // candidate → done ((0 + 4 - 1) % 4 = 3)
+        let _ = ti.update(&Msg::Select);
         assert!(ti.is_done());
     }
 
@@ -377,9 +395,9 @@ mod tests {
     #[test]
     fn textinput_capacity() {
         let mut ti = TextInput::<2>::new("X").with_charset("A");
-        ti.update(&Msg::Select);
-        ti.update(&Msg::Select);
-        ti.update(&Msg::Select); // full → ignored
+        let _ = ti.update(&Msg::Select);
+        let _ = ti.update(&Msg::Select);
+        let _ = ti.update(&Msg::Select); // full → ignored
         assert_eq!(ti.text(), "AA");
     }
 
@@ -399,7 +417,7 @@ mod tests {
 
         // Editing → ribbon on row 1 (y = line_height = 10), candidate Focus.
         ti.set_editing(true);
-        ti.update(&Msg::Down); // candidate → 'B'
+        let _ = ti.update(&Msg::Down); // candidate → 'B'
         let mut t = RecordingTarget::new(120, 30);
         ti.view(&mut t, area);
         let tx: Vec<_> = t
@@ -477,13 +495,13 @@ mod tests {
         {
             let mut fields: [&mut dyn FormField; 2] = [&mut ti, &mut ct];
             form.sync_focus(&mut fields);
-            form.update(&Msg::Select, &mut fields); // enter edit on TextInput
+            let _ = form.update(&Msg::Select, &mut fields); // enter edit on TextInput
             assert!(form.is_editing());
-            form.update(&Msg::Select, &mut fields); // routed into field → appends 'A'
+            let _ = form.update(&Msg::Select, &mut fields); // routed into field → appends 'A'
             assert!(form.is_editing());
             assert_eq!(form.focus_index(), 0);
-            form.update(&Msg::Up, &mut fields); // candidate → done token
-            form.update(&Msg::Select, &mut fields); // done → form leaves edit
+            let _ = form.update(&Msg::Up, &mut fields); // candidate → done token
+            let _ = form.update(&Msg::Select, &mut fields); // done → form leaves edit
             assert!(!form.is_editing());
         }
         assert_eq!(ti.text(), "A");
@@ -505,8 +523,8 @@ mod tests {
     fn textinput_set_editing_resets_done() {
         let mut ti = TextInput::<8>::new("X").with_charset("AB");
         ti.set_editing(true);
-        ti.update(&Msg::Up);
-        ti.update(&Msg::Select);
+        let _ = ti.update(&Msg::Up);
+        let _ = ti.update(&Msg::Select);
         assert!(ti.editing_finished());
         ti.set_editing(false);
         assert!(!ti.editing_finished());
@@ -520,20 +538,20 @@ mod tests {
         assert!(ti.dirty());
         ti.mark_clean();
 
-        ti.update(&Msg::Tick); // no token, no text, no change
+        let _ = ti.update(&Msg::Tick); // no token, no text, no change
         assert!(!ti.dirty());
 
-        ti.update(&Msg::Down); // candidate moves - the ribbon changes
+        let _ = ti.update(&Msg::Down); // candidate moves - the ribbon changes
         assert!(ti.dirty());
         ti.mark_clean();
 
-        ti.update(&Msg::Select); // appends a character
+        let _ = ti.update(&Msg::Select); // appends a character
         assert!(ti.dirty());
         ti.mark_clean();
 
-        ti.update(&Msg::Select); // buffer full (N = 2) after two appends
+        let _ = ti.update(&Msg::Select); // buffer full (N = 2) after two appends
         ti.mark_clean();
-        ti.update(&Msg::Select); // nothing left to append → no change
+        let _ = ti.update(&Msg::Select); // nothing left to append → no change
         assert!(!ti.dirty());
 
         ti.focus();
@@ -549,5 +567,37 @@ mod tests {
         ti.mark_clean();
         ti.set_editing(true); // already editing → no change
         assert!(!ti.dirty());
+    }
+
+    // ── Outcome (event routing) ─────────────────────────────────────────────
+
+    /// The token ribbon is a ring, so it has no edge to hand an event back at -
+    /// the way out is the `done` token, not running off the end.
+    #[test]
+    fn textinput_ribbon_has_no_edge() {
+        let mut ti: TextInput<8> = TextInput::new("Name").with_charset("ab");
+        for _ in 0..(2 + 2) * 2 {
+            assert_eq!(ti.update(&Msg::Down), Outcome::Consumed);
+        }
+        assert_eq!(ti.update(&Msg::Up), Outcome::Consumed);
+    }
+
+    #[test]
+    fn textinput_select_types_and_done_activates() {
+        let mut ti: TextInput<2> = TextInput::new("Name").with_charset("ab");
+        assert_eq!(ti.update(&Msg::Select), Outcome::Consumed, "typed 'a'");
+        assert_eq!(
+            ti.update(&Msg::Select),
+            Outcome::Consumed,
+            "typed 'a' again"
+        );
+        // The buffer is full: the keystroke is swallowed mid-edit, not passed on.
+        assert_eq!(ti.update(&Msg::Select), Outcome::Consumed, "full buffer");
+        assert_eq!(ti.text(), "aa");
+
+        // Walk to the `done` token (charset len + 1) and finish.
+        let _ = ti.update(&Msg::Up); // one step back from 'a' wraps onto done
+        assert_eq!(ti.update(&Msg::Select), Outcome::Activated);
+        assert!(ti.is_done());
     }
 }

@@ -1,7 +1,7 @@
 use core::cell::Cell;
 use core::fmt::Write;
 
-use crate::{Area, Component, Msg, RenderTarget, Scrollbar, Style, V_SCROLL_RESERVE};
+use crate::{Area, Component, Msg, Outcome, RenderTarget, Scrollbar, Style, V_SCROLL_RESERVE};
 
 // ── LinesModel (data provider for text) ─────────────────────────────────────
 
@@ -239,7 +239,7 @@ impl<'a, M: LinesModel + ?Sized> Pager<'a, M> {
 }
 
 impl<'a, M: LinesModel + ?Sized> Component for Pager<'a, M> {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
         // Tail mode ticks constantly, so the gate has to be honest about it: a
         // tick that drags the view down repaints, one that finds no new lines
         // does not - otherwise a UART pager would repaint on every tick forever.
@@ -248,6 +248,13 @@ impl<'a, M: LinesModel + ?Sized> Component for Pager<'a, M> {
         if self.offset > max {
             self.offset = max;
         }
+        // The outcome is measured from *after* the clamp: re-clamping onto a
+        // shrunken log is housekeeping the pager does whatever arrives, not
+        // something the incoming event paid for.
+        let settled = (self.offset, self.follow);
+        // Only these three are the pager's to spend. Anything else (a Char, a
+        // Select) is handed straight back, however the log moved underneath.
+        let addressed = matches!(msg, Msg::Up | Msg::Down | Msg::Tick);
         match msg {
             Msg::Up => {
                 self.follow = false;
@@ -270,6 +277,15 @@ impl<'a, M: LinesModel + ?Sized> Component for Pager<'a, M> {
         }
         if (self.offset, self.follow) != before {
             self.dirty.set(true);
+        }
+        // Scrolling that moved the view - or dropped out of / re-entered tail
+        // mode - used the event up; a `Tick` counts only while following, and
+        // only when new lines actually dragged the view down. At the top or the
+        // bottom with nothing left to do, the event goes back to the container.
+        if addressed && (self.offset, self.follow) != settled {
+            Outcome::Consumed
+        } else {
+            Outcome::Ignored
         }
     }
 
@@ -396,10 +412,10 @@ mod tests {
         let mut p = Pager::new(LINES); // 6 lines
         let mut t = RecordingTarget::new(120, 30); // 3 rows
         p.view(&mut t, Area::new(0, 0, 120, 30)); // caches rows=3, cols=20
-        p.update(&Msg::Down);
+        let _ = p.update(&Msg::Down);
         assert_eq!(p.offset(), 1);
         for _ in 0..20 {
-            p.update(&Msg::Down);
+            let _ = p.update(&Msg::Down);
         }
         // max_offset = 6 - 3 = 3 (each short line is one row).
         assert_eq!(p.offset(), 3);
@@ -410,10 +426,10 @@ mod tests {
         let mut p = Pager::new(LINES);
         let mut t = RecordingTarget::new(120, 30);
         p.view(&mut t, Area::new(0, 0, 120, 30));
-        p.update(&Msg::Down);
-        p.update(&Msg::Down);
+        let _ = p.update(&Msg::Down);
+        let _ = p.update(&Msg::Down);
         for _ in 0..10 {
-            p.update(&Msg::Up);
+            let _ = p.update(&Msg::Up);
         }
         assert_eq!(p.offset(), 0);
     }
@@ -470,12 +486,12 @@ mod tests {
         let mut p = Pager::new(&s).with_follow(true);
         let mut t = RecordingTarget::new(60, 30); // 3 rows, "log line" = 8 ≤ 10 cols
         p.view(&mut t, Area::new(0, 0, 60, 30)); // cache rows=3
-        p.update(&Msg::Tick); // follow → pin to bottom
+        let _ = p.update(&Msg::Tick); // follow → pin to bottom
         assert_eq!(p.offset(), 7); // 10 - 3
 
         // The stream grows by 5 lines, then a tick.
         s.count.set(15);
-        p.update(&Msg::Tick);
+        let _ = p.update(&Msg::Tick);
         assert_eq!(p.offset(), 12); // 15 - 3 - still pinned to the new bottom
         assert!(p.is_following());
     }
@@ -488,22 +504,22 @@ mod tests {
         let mut p = Pager::new(&s).with_follow(true);
         let mut t = RecordingTarget::new(60, 30);
         p.view(&mut t, Area::new(0, 0, 60, 30));
-        p.update(&Msg::Tick);
+        let _ = p.update(&Msg::Tick);
         assert_eq!(p.offset(), 7);
-        p.update(&Msg::Up); // leaves tail
+        let _ = p.update(&Msg::Up); // leaves tail
         assert!(!p.is_following());
         assert_eq!(p.offset(), 6);
         // Growth no longer drags the view down.
         s.count.set(20);
-        p.update(&Msg::Tick);
+        let _ = p.update(&Msg::Tick);
         assert_eq!(p.offset(), 6);
     }
 
     #[test]
     fn empty_pager_safe() {
         let mut p = Pager::new(&[] as &[&str]);
-        p.update(&Msg::Down);
-        p.update(&Msg::Up);
+        let _ = p.update(&Msg::Down);
+        let _ = p.update(&Msg::Up);
         assert_eq!(p.offset(), 0);
         assert!(p.is_empty());
         let mut t = RecordingTarget::new(60, 30);
@@ -521,19 +537,19 @@ mod tests {
         p.view(&mut t, Area::new(0, 0, 120, 30));
         assert!(!p.dirty(), "view() leaves it clean");
 
-        p.update(&Msg::Up); // already at the top, and follow is already off
-        p.update(&Msg::Tick);
+        let _ = p.update(&Msg::Up); // already at the top, and follow is already off
+        let _ = p.update(&Msg::Tick);
         assert!(!p.dirty());
 
-        p.update(&Msg::Down); // scrolls
+        let _ = p.update(&Msg::Down); // scrolls
         assert!(p.dirty());
         p.mark_clean();
 
         for _ in 0..10 {
-            p.update(&Msg::Down); // reaches the bottom, engaging follow
+            let _ = p.update(&Msg::Down); // reaches the bottom, engaging follow
         }
         p.mark_clean();
-        p.update(&Msg::Down); // pinned at the bottom, nothing moves
+        let _ = p.update(&Msg::Down); // pinned at the bottom, nothing moves
         assert!(!p.dirty());
 
         p.mark_dirty();
@@ -550,14 +566,57 @@ mod tests {
         let mut p = Pager::new(&s).with_follow(true);
         let mut t = RecordingTarget::new(60, 30);
         p.view(&mut t, Area::new(0, 0, 60, 30));
-        p.update(&Msg::Tick); // pins to the bottom
+        let _ = p.update(&Msg::Tick); // pins to the bottom
         p.mark_clean();
 
-        p.update(&Msg::Tick); // nothing new arrived
+        let _ = p.update(&Msg::Tick); // nothing new arrived
         assert!(!p.dirty());
 
         s.count.set(15); // five new lines
-        p.update(&Msg::Tick);
+        let _ = p.update(&Msg::Tick);
         assert!(p.dirty());
+    }
+
+    // ── Outcome (event routing) ─────────────────────────────────────────────
+
+    #[test]
+    fn pager_spends_a_scroll_and_hands_back_an_edge() {
+        let mut p = Pager::new(LINES);
+        let mut t = RecordingTarget::new(120, 30); // 3 of 6 lines
+        p.view(&mut t, Area::new(0, 0, 120, 30));
+
+        assert_eq!(p.update(&Msg::Up), Outcome::Ignored, "Up at the top");
+        assert_eq!(p.update(&Msg::Down), Outcome::Consumed, "a line of scroll");
+        while !p.is_following() {
+            assert_eq!(p.update(&Msg::Down), Outcome::Consumed);
+        }
+        assert_eq!(p.update(&Msg::Down), Outcome::Ignored, "Down at the bottom");
+    }
+
+    /// Tail mode is the one place a `Tick` is the pager's to spend: it is
+    /// Consumed only when new lines actually dragged the view down.
+    #[test]
+    fn pager_tick_counts_only_while_the_tail_moves() {
+        let s = Stream {
+            count: Cell::new(10),
+        };
+        let mut p = Pager::new(&s).with_follow(true);
+        let mut t = RecordingTarget::new(60, 30);
+        p.view(&mut t, Area::new(0, 0, 60, 30));
+        let _ = p.update(&Msg::Tick); // pins to the bottom
+
+        assert_eq!(
+            p.update(&Msg::Tick),
+            Outcome::Ignored,
+            "nothing new arrived"
+        );
+        s.count.set(15); // five new lines
+        assert_eq!(p.update(&Msg::Tick), Outcome::Consumed, "the tail moved");
+
+        // A Tick outside tail mode is nobody's: it belongs to the container.
+        let mut still = Pager::new(LINES);
+        let mut t2 = RecordingTarget::new(120, 30);
+        still.view(&mut t2, Area::new(0, 0, 120, 30));
+        assert_eq!(still.update(&Msg::Tick), Outcome::Ignored);
     }
 }

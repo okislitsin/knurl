@@ -1,7 +1,7 @@
 use core::cell::Cell;
 
 use crate::{
-    Area, Component, Marker, Msg, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band,
+    Area, Component, Marker, Msg, Outcome, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band,
     draw_v_scroll,
 };
 
@@ -85,34 +85,45 @@ impl<'a> Radio<'a> {
 }
 
 impl<'a> Component for Radio<'a> {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
         let n = self.options.len();
         if n == 0 {
-            return;
+            // No options: every event stays available to the container.
+            return Outcome::Ignored;
         }
         let page = self.page_size.get().max(1);
         // Choosing the option already chosen, or a clamped end, moves nothing -
         // comparing the three indices afterwards keeps those frames clean.
         let before = (self.cursor, self.offset, self.selected);
-        match msg {
+        let outcome = match msg {
             Msg::Down if self.cursor + 1 < n => {
                 self.cursor += 1;
                 if self.cursor >= self.offset + page {
                     self.offset = self.cursor + 1 - page;
                 }
+                Outcome::Consumed
             }
             Msg::Up if self.cursor > 0 => {
                 self.cursor -= 1;
                 if self.cursor < self.offset {
                     self.offset = self.cursor;
                 }
+                Outcome::Consumed
             }
-            Msg::Select => self.selected = self.cursor,
-            _ => {}
-        }
+            // The chosen option is the dial's own state, not an app-level
+            // action, so a pick is Consumed even when it re-picks the same one.
+            Msg::Select => {
+                self.selected = self.cursor;
+                Outcome::Consumed
+            }
+            // A clamped end: the cursor has run out of options, so the event
+            // goes back to the container.
+            _ => Outcome::Ignored,
+        };
         if (self.cursor, self.offset, self.selected) != before {
             self.dirty.set(true);
         }
+        outcome
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
@@ -252,7 +263,7 @@ mod tests {
     #[test]
     fn radio_cursor_moves_without_select() {
         let mut radio = Radio::new(OPTS);
-        radio.update(&Msg::Down);
+        let _ = radio.update(&Msg::Down);
         assert_eq!(radio.cursor(), 1);
         assert_eq!(radio.selected(), 0);
     }
@@ -261,8 +272,8 @@ mod tests {
     fn radio_select_sets_chosen() {
         let mut radio = Radio::new(OPTS);
         radio.focus();
-        radio.update(&Msg::Down);
-        radio.update(&Msg::Select);
+        let _ = radio.update(&Msg::Down);
+        let _ = radio.update(&Msg::Select);
         assert_eq!(radio.selected(), 1);
         assert_eq!(radio.selected_option(), "Beta");
 
@@ -279,7 +290,7 @@ mod tests {
         let mut radio = Radio::new(OPTS);
         let mut t = RecordingTarget::new(120, 10); // 1 row visible
         radio.view(&mut t, Area::new(0, 0, 120, 10)); // page ← 1
-        radio.update(&Msg::Down); // cursor leaves window → scrolls
+        let _ = radio.update(&Msg::Down); // cursor leaves window → scrolls
 
         let mut t2 = RecordingTarget::new(120, 10);
         radio.view(&mut t2, Area::new(0, 0, 120, 10));
@@ -332,7 +343,7 @@ mod tests {
     #[test]
     fn unfocused_radio_shows_the_cursor_marker() {
         let mut radio = Radio::new(OPTS);
-        radio.update(&Msg::Down); // cursor on "Beta", "Alpha" still chosen
+        let _ = radio.update(&Msg::Down); // cursor on "Beta", "Alpha" still chosen
         let mut t = RecordingTarget::new(120, 30);
         radio.view(&mut t, Area::new(0, 0, 120, 30));
 
@@ -370,8 +381,8 @@ mod tests {
     #[test]
     fn radio_empty_safe() {
         let mut radio = Radio::new(&[]);
-        radio.update(&Msg::Down);
-        radio.update(&Msg::Select);
+        let _ = radio.update(&Msg::Down);
+        let _ = radio.update(&Msg::Select);
         assert_eq!(radio.selected_option(), "");
         let mut t = RecordingTarget::new(120, 30);
         radio.view(&mut t, Area::new(0, 0, 120, 30));
@@ -387,15 +398,15 @@ mod tests {
         assert!(radio.dirty());
         radio.mark_clean();
 
-        radio.update(&Msg::Up); // cursor already at the top
-        radio.update(&Msg::Tick);
-        radio.update(&Msg::Select); // row 0 is already the chosen one
+        let _ = radio.update(&Msg::Up); // cursor already at the top
+        let _ = radio.update(&Msg::Tick);
+        let _ = radio.update(&Msg::Select); // row 0 is already the chosen one
         assert!(!radio.dirty());
 
-        radio.update(&Msg::Down);
+        let _ = radio.update(&Msg::Down);
         assert!(radio.dirty());
         radio.mark_clean();
-        radio.update(&Msg::Select); // chooses row 1 - a real change
+        let _ = radio.update(&Msg::Select); // chooses row 1 - a real change
         assert!(radio.dirty());
         radio.mark_clean();
 
@@ -414,7 +425,7 @@ mod tests {
         radio.view(&mut t0, area);
         assert!(!t0.ops().is_empty());
 
-        radio.update(&Msg::Up); // clamped
+        let _ = radio.update(&Msg::Up); // clamped
         let mut t1 = RecordingTarget::new(120, 30);
         radio.view(&mut t1, area);
         assert!(t1.ops().is_empty());
@@ -458,5 +469,53 @@ mod tests {
         let mut t = RecordingTarget::new(120, 30); // 3 rows for 3 options
         radio.view(&mut t, Area::new(0, 0, 120, 30));
         assert!(!t.ops().iter().any(|op| matches!(op, Op::Fill { .. })));
+    }
+
+    // ── Outcome (event routing) ─────────────────────────────────────────────
+
+    #[test]
+    fn radio_spends_a_step_and_hands_back_an_edge() {
+        let mut r = Radio::new(OPTS);
+        assert_eq!(
+            r.update(&Msg::Up),
+            Outcome::Ignored,
+            "Up at the first option"
+        );
+        assert_eq!(
+            r.update(&Msg::Down),
+            Outcome::Consumed,
+            "a step in the middle"
+        );
+        while r.cursor() + 1 < OPTS.len() {
+            assert_eq!(r.update(&Msg::Down), Outcome::Consumed);
+        }
+        assert_eq!(
+            r.update(&Msg::Down),
+            Outcome::Ignored,
+            "Down at the last option"
+        );
+    }
+
+    /// Choosing is the dial's own state, not an app-level action - so it is
+    /// Consumed, and stays Consumed when it re-picks the option already chosen.
+    #[test]
+    fn radio_select_is_consumed_even_when_it_changes_nothing() {
+        let mut r = Radio::new(OPTS);
+        assert_eq!(r.update(&Msg::Select), Outcome::Consumed);
+        assert_eq!(r.update(&Msg::Select), Outcome::Consumed);
+        assert_eq!(r.selected(), 0);
+    }
+
+    #[test]
+    fn empty_radio_hands_back_everything() {
+        let none: &[&str] = &[];
+        let mut r = Radio::new(none);
+        for msg in [Msg::Up, Msg::Down, Msg::Select, Msg::Tick] {
+            assert_eq!(
+                r.update(&msg),
+                Outcome::Ignored,
+                "{msg:?} on an empty group"
+            );
+        }
     }
 }

@@ -1,7 +1,7 @@
 use core::cell::Cell;
 
 use crate::{
-    Area, Component, Marker, Msg, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band,
+    Area, Component, Marker, Msg, Outcome, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band,
     draw_v_scroll,
 };
 
@@ -139,10 +139,11 @@ impl<'a, M: ListModel + ?Sized> List<'a, M> {
 }
 
 impl<'a, M: ListModel + ?Sized> Component for List<'a, M> {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
         let n = self.model.item_count();
         if n == 0 {
-            return;
+            // Nothing to point at: every event stays available to the container.
+            return Outcome::Ignored;
         }
         let page = self.page_size.get().max(1);
         match msg {
@@ -153,6 +154,7 @@ impl<'a, M: ListModel + ?Sized> Component for List<'a, M> {
                     self.offset = self.selected + 1 - page;
                 }
                 self.dirty.set(true);
+                Outcome::Consumed
             }
             Msg::Up if self.selected > 0 => {
                 self.selected -= 1;
@@ -161,10 +163,15 @@ impl<'a, M: ListModel + ?Sized> Component for List<'a, M> {
                     self.offset = self.selected;
                 }
                 self.dirty.set(true);
+                Outcome::Consumed
             }
-            // Select and the clamped ends change nothing - leave the gate clean
-            // so an idle frame is skipped. The caller reads selected().
-            _ => {}
+            // Picking the highlighted item changes no pixel - the gate stays
+            // clean - but it is the choice the app acts on. The caller reads
+            // selected() to find out which.
+            Msg::Select => Outcome::Activated,
+            // A clamped end: the cursor has run out of list, so the event goes
+            // back to the container to spend on the next focus zone.
+            _ => Outcome::Ignored,
         }
     }
 
@@ -444,7 +451,7 @@ mod tests {
         list.focus();
         let mut t0 = RecordingTarget::new(120, 30);
         list.view(&mut t0, Area::new(0, 0, 120, 30));
-        list.update(&Msg::Down);
+        let _ = list.update(&Msg::Down);
 
         let mut t1 = RecordingTarget::new(120, 30);
         list.view(&mut t1, Area::new(0, 0, 120, 30));
@@ -465,11 +472,11 @@ mod tests {
         let mut t = RecordingTarget::new(120, 30); // 3 rows
         list.view(&mut t, Area::new(0, 0, 120, 30)); // page_size ← 3
 
-        list.update(&Msg::Down);
-        list.update(&Msg::Down);
+        let _ = list.update(&Msg::Down);
+        let _ = list.update(&Msg::Down);
         assert_eq!(list.offset(), 0); // 0,1,2 still inside
 
-        list.update(&Msg::Down); // selected → 3, window must advance
+        let _ = list.update(&Msg::Down); // selected → 3, window must advance
         assert_eq!(list.selected(), 3);
         assert_eq!(list.offset(), 1); // window [1,2,3]
 
@@ -488,15 +495,15 @@ mod tests {
         let mut list = List::new(ITEMS);
         let mut t = RecordingTarget::new(120, 30);
         list.view(&mut t, Area::new(0, 0, 120, 30));
-        list.update(&Msg::Down);
-        list.update(&Msg::Down);
-        list.update(&Msg::Down);
+        let _ = list.update(&Msg::Down);
+        let _ = list.update(&Msg::Down);
+        let _ = list.update(&Msg::Down);
         assert_eq!(list.offset(), 1);
-        list.update(&Msg::Up); // 3→2, inside
+        let _ = list.update(&Msg::Up); // 3→2, inside
         assert_eq!(list.offset(), 1);
-        list.update(&Msg::Up); // 2→1, inside
+        let _ = list.update(&Msg::Up); // 2→1, inside
         assert_eq!(list.offset(), 1);
-        list.update(&Msg::Up); // 1→0, leaves top
+        let _ = list.update(&Msg::Up); // 1→0, leaves top
         assert_eq!(list.selected(), 0);
         assert_eq!(list.offset(), 0);
     }
@@ -507,12 +514,12 @@ mod tests {
         let mut t = RecordingTarget::new(120, 30);
         list.view(&mut t, Area::new(0, 0, 120, 30));
         for _ in 0..20 {
-            list.update(&Msg::Down);
+            let _ = list.update(&Msg::Down);
         }
         assert_eq!(list.selected(), 4);
         assert_eq!(list.offset(), 2); // window [2,3,4]
         for _ in 0..20 {
-            list.update(&Msg::Up);
+            let _ = list.update(&Msg::Up);
         }
         assert_eq!(list.selected(), 0);
         assert_eq!(list.offset(), 0);
@@ -546,7 +553,7 @@ mod tests {
         let mut t = RecordingTarget::new(120, 30);
         list.view(&mut t, Area::new(0, 0, 120, 30));
         for _ in 0..4 {
-            list.update(&Msg::Down); // to the last item, offset 2 (max)
+            let _ = list.update(&Msg::Down); // to the last item, offset 2 (max)
         }
         let mut t2 = RecordingTarget::new(120, 30);
         list.view(&mut t2, Area::new(0, 0, 120, 30));
@@ -604,9 +611,9 @@ mod tests {
     #[test]
     fn single_item_navigates_safely() {
         let mut list = List::new(&["Only"]);
-        list.update(&Msg::Up);
+        let _ = list.update(&Msg::Up);
         assert_eq!(list.selected(), 0);
-        list.update(&Msg::Down);
+        let _ = list.update(&Msg::Down);
         assert_eq!(list.selected(), 0);
         assert_eq!(list.selected_item(), "Only");
     }
@@ -615,7 +622,7 @@ mod tests {
     fn selected_item_tracks_selection() {
         let mut list = List::new(ITEMS);
         assert_eq!(list.selected_item(), "Alpha");
-        list.update(&Msg::Down);
+        let _ = list.update(&Msg::Down);
         assert_eq!(list.selected_item(), "Beta");
     }
 
@@ -644,7 +651,7 @@ mod tests {
     fn state_change_marks_dirty() {
         let mut list = List::new(ITEMS);
         list.mark_clean();
-        list.update(&Msg::Down); // selection moved
+        let _ = list.update(&Msg::Down); // selection moved
         assert!(list.dirty());
     }
 
@@ -653,8 +660,8 @@ mod tests {
         let mut list = List::new(ITEMS);
         list.mark_clean();
         // Select changes nothing in a List; Up at the top row is clamped.
-        list.update(&Msg::Select);
-        list.update(&Msg::Up);
+        let _ = list.update(&Msg::Select);
+        let _ = list.update(&Msg::Up);
         assert!(!list.dirty());
     }
 
@@ -681,15 +688,64 @@ mod tests {
         assert!(!t1.ops().is_empty());
 
         // A no-op update leaves it clean → the gate skips, zero ops recorded.
-        list.update(&Msg::Select);
+        let _ = list.update(&Msg::Select);
         let mut t2 = RecordingTarget::new(120, 30);
         assert!(!paint_if_dirty(&list, &mut t2, area));
         assert!(t2.ops().is_empty());
 
         // A real move re-dirties → it paints again.
-        list.update(&Msg::Down);
+        let _ = list.update(&Msg::Down);
         let mut t3 = RecordingTarget::new(120, 30);
         assert!(paint_if_dirty(&list, &mut t3, area));
         assert!(!t3.ops().is_empty());
+    }
+
+    // ── Outcome (event routing) ─────────────────────────────────────────────
+
+    /// The contract every focus container will stand on: a step inside the list
+    /// is spent here, a step off either end comes back unspent.
+    #[test]
+    fn list_spends_a_step_and_hands_back_an_edge() {
+        let mut list = List::new(ITEMS);
+        assert_eq!(
+            list.update(&Msg::Up),
+            Outcome::Ignored,
+            "Up at the first item"
+        );
+        assert_eq!(
+            list.update(&Msg::Down),
+            Outcome::Consumed,
+            "a step in the middle"
+        );
+        while list.selected() + 1 < ITEMS.len() {
+            assert_eq!(list.update(&Msg::Down), Outcome::Consumed);
+        }
+        assert_eq!(
+            list.update(&Msg::Down),
+            Outcome::Ignored,
+            "Down at the last item"
+        );
+    }
+
+    #[test]
+    fn list_select_activates_and_a_tick_is_not_its_event() {
+        let mut list = List::new(ITEMS);
+        let _ = list.update(&Msg::Down);
+        assert_eq!(list.update(&Msg::Select), Outcome::Activated);
+        assert_eq!(list.selected(), 1, "Select picks, it does not move");
+        assert_eq!(list.update(&Msg::Tick), Outcome::Ignored);
+    }
+
+    #[test]
+    fn empty_list_hands_back_everything() {
+        let none: &[&str] = &[];
+        let mut list = List::new(none);
+        for msg in [Msg::Up, Msg::Down, Msg::Select, Msg::Tick, Msg::Char('a')] {
+            assert_eq!(
+                list.update(&msg),
+                Outcome::Ignored,
+                "{msg:?} on an empty list"
+            );
+        }
     }
 }

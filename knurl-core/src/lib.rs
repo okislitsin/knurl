@@ -183,6 +183,62 @@ pub enum Msg {
     Tick,
 }
 
+// ── Event outcome ────────────────────────────────────────────────────────────
+
+/// What became of a [`Msg`] handed to a component's [`update`](Component::update).
+///
+/// This is the routing currency between a container and its children: the
+/// container asks a widget to handle an event and reads back whether it may
+/// hand that same event to somebody else. It describes the **fate of the
+/// event**, never whether pixels changed - a `Dialog` confirming on `Select`
+/// repaints nothing and still reports [`Activated`](Outcome::Activated), so
+/// never derive an `Outcome` from a dirty flag.
+///
+/// `#[must_use]`: losing the result silently is exactly the bug this type
+/// exists to prevent. Where a caller genuinely has no use for it, write
+/// `let _ = c.update(&msg);` and make that explicit.
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// The event was not used: the cursor sits at an edge, or the `Msg` was not
+    /// addressed to this widget at all (a `Char` for a list, a `Tick` for a
+    /// static label). The container is free to pass it on - to the next focus
+    /// zone, or up to the application.
+    ///
+    /// It is a routing signal, **not an error**: "not mine, try someone else".
+    Ignored,
+    /// The event was used by the widget: state moved, or the widget deliberately
+    /// swallowed the event. The container passes it no further.
+    Consumed,
+    /// The user made a choice the application usually reacts to - a button
+    /// pressed, a list item chosen, a dialog confirmed. Also consumed: a
+    /// container stops routing it, but propagates the `Activated` outwards so
+    /// the application sees it. *Which* item was chosen is asked of the widget
+    /// ([`List::selected`], [`Dialog::selected_button`], …), which keeps this
+    /// type `Copy` and payload-free.
+    Activated,
+}
+
+impl Outcome {
+    /// Whether the event went unused (see [`Outcome::Ignored`]) - the question a
+    /// container asks before routing the event on.
+    pub fn is_ignored(self) -> bool {
+        self == Self::Ignored
+    }
+
+    /// Whether the widget took the event (`Consumed` **or** `Activated`) - the
+    /// complement of [`is_ignored`](Outcome::is_ignored).
+    pub fn is_handled(self) -> bool {
+        self != Self::Ignored
+    }
+
+    /// Whether the user made a choice the application usually acts on (see
+    /// [`Outcome::Activated`]).
+    pub fn is_activated(self) -> bool {
+        self == Self::Activated
+    }
+}
+
 // ── Text styling ─────────────────────────────────────────────────────────────
 
 /// Semantic role of a piece of text - *what* it is, not *how* it's drawn.
@@ -536,9 +592,29 @@ pub(crate) fn draw_cursor_band(target: &mut dyn RenderTarget, row: Area, focused
 /// `mark_clean()` a no-op): they self-clear and repaint every frame - correct,
 /// just not optimized.
 pub trait Component {
-    /// Called once per event. Components update only their own state, and set
-    /// their dirty flag when that state actually changes.
-    fn update(&mut self, msg: &Msg);
+    /// Called once per event. Components update only their own state, set their
+    /// dirty flag when that state actually changes, and report what became of
+    /// the event as an [`Outcome`]:
+    ///
+    /// - [`Ignored`](Outcome::Ignored) - the widget could not use the event:
+    ///   `Up` on the first item, `Down` on the last, a `Char` for a list, a
+    ///   `Tick` for a static label. This is a **signal to the container**, not
+    ///   an error: the event is still unspent, so the container may route it on
+    ///   to the next focus zone or up to the application. Getting this right at
+    ///   the edges is what lets a container know the cursor has run out of
+    ///   widget and focus should move.
+    /// - [`Consumed`](Outcome::Consumed) - the event was used: the cursor moved,
+    ///   a value changed, a `Tick` advanced an animation, or the widget
+    ///   deliberately swallowed it. The container routes it no further.
+    /// - [`Activated`](Outcome::Activated) - the user made a choice the
+    ///   application usually acts on (a button press, a list item chosen, a
+    ///   dialog confirmed). Consumed as far as routing goes, but containers pass
+    ///   the `Activated` back out so the application sees it.
+    ///
+    /// The outcome tracks the **event**, not the pixels: `Consumed` is not the
+    /// same as dirty, and a repaint is not the same as consumption (see the
+    /// `Dialog`, which confirms without changing a pixel).
+    fn update(&mut self, msg: &Msg) -> Outcome;
 
     /// Paints the component into `area`. The `area` has already been cleared by
     /// [`view`](Component::view), which only calls this when the component is
@@ -635,8 +711,9 @@ impl<'a> Label<'a> {
 }
 
 impl<'a> Component for Label<'a> {
-    fn update(&mut self, _msg: &Msg) {
-        // Labels are static; nothing to update.
+    fn update(&mut self, _msg: &Msg) -> Outcome {
+        // Labels are static: every event stays available to whoever is next.
+        Outcome::Ignored
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
@@ -1056,7 +1133,7 @@ mod tests {
         assert!(!title.dirty() && !spinner.dirty());
 
         // Idle tick: only the spinner is dirtied.
-        spinner.update(&Msg::Tick);
+        let _ = spinner.update(&Msg::Tick);
         assert!(spinner.dirty() && !title.dirty());
 
         // Re-render the screen. The title self-gates (clean → nothing); only the

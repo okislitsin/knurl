@@ -196,8 +196,8 @@ fn main() {
     // List page - selection driven down a few rows.
     let mut list = List::new(LIST_ITEMS);
     list.focus();
-    list.update(&Msg::Down);
-    list.update(&Msg::Down);
+    let _ = list.update(&Msg::Down);
+    let _ = list.update(&Msg::Down);
     shoot_mono(128, 64, 4, "oled-list.png", |t| {
         let body = oled_chrome(t, "List");
         let top = body_with_back(t, body);
@@ -207,9 +207,9 @@ fn main() {
     // Tree page - expand the root and "src" to show nesting.
     let mut tree = Tree::new(TREE_ITEMS);
     tree.focus();
-    tree.update(&Msg::Select); // expand "project"
-    tree.update(&Msg::Down);
-    tree.update(&Msg::Select); // expand "src"
+    let _ = tree.update(&Msg::Select); // expand "project"
+    let _ = tree.update(&Msg::Down);
+    let _ = tree.update(&Msg::Select); // expand "src"
     shoot_mono(128, 64, 4, "oled-tree.png", |t| {
         let body = oled_chrome(t, "Tree");
         let top = body_with_back(t, body);
@@ -249,7 +249,7 @@ fn main() {
 
     let mut table = Table::new(&TABLE_ROWS, &TABLE_W).with_headers(TABLE_HEADERS);
     table.focus();
-    table.update(&Msg::Down);
+    let _ = table.update(&Msg::Down);
     shoot_color(320, 240, 2, "tft-table.png", |t| {
         let body = tft_chrome(t, "Table", "Turn: move   Push: Back");
         let top = body_with_back(t, body);

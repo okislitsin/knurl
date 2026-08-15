@@ -1,6 +1,8 @@
 use core::cell::Cell;
 
-use crate::{Area, BorderStyle, Component, FormField, Msg, RenderTarget, Style, draw_cursor_band};
+use crate::{
+    Area, BorderStyle, Component, FormField, Msg, Outcome, RenderTarget, Style, draw_cursor_band,
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -139,11 +141,16 @@ impl<'a> Checkbox<'a> {
 }
 
 impl<'a> Component for Checkbox<'a> {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
+        // Select flips the box - the box's own state, not an app-level action.
+        // Up/Down are not the checkbox's to take: they belong to whatever moves
+        // focus between fields.
         if let Msg::Select = msg {
             self.checked = !self.checked;
             self.dirty.set(true);
+            return Outcome::Consumed;
         }
+        Outcome::Ignored
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
@@ -231,16 +238,33 @@ impl<'a> Toggle<'a> {
 }
 
 impl<'a> Component for Toggle<'a> {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
+        // Select always flips, so it is always spent. Left/Right (keyboards
+        // only) set an absolute state: asking for the state it is already in
+        // is an edge like any other, and goes back to the container.
         let before = self.on;
-        match msg {
-            Msg::Select => self.on = !self.on,
-            Msg::Right => self.on = true,
-            Msg::Left => self.on = false,
-            _ => {}
-        }
+        let flipped = match msg {
+            Msg::Select => {
+                self.on = !self.on;
+                true
+            }
+            Msg::Right => {
+                self.on = true;
+                self.on != before
+            }
+            Msg::Left => {
+                self.on = false;
+                self.on != before
+            }
+            _ => return Outcome::Ignored,
+        };
         if self.on != before {
             self.dirty.set(true);
+        }
+        if flipped {
+            Outcome::Consumed
+        } else {
+            Outcome::Ignored
         }
     }
 
@@ -323,14 +347,18 @@ impl<'a> Button<'a> {
 }
 
 impl<'a> Component for Button<'a> {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
         if let Msg::Select = msg {
             // No dirty: `pressed` is a latch the app polls, not something the
             // button draws, so a press changes no pixel. (It is also cleared by
             // `take_pressed` before the next frame, so there would be nothing
-            // left to render by the time a repaint ran.)
+            // left to render by the time a repaint ran.) The press itself is
+            // reported here - the caller no longer has to poll to hear about it.
             self.pressed = true;
+            return Outcome::Activated;
         }
+        // A button has nowhere to move: Up/Down belong to the focus container.
+        Outcome::Ignored
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
@@ -437,7 +465,7 @@ impl<'a> Counter<'a> {
 }
 
 impl<'a> Component for Counter<'a> {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
         let before = self.value;
         // Both directions clamp against *both* bounds, so a step never leaves
         // the range from either end.
@@ -448,10 +476,17 @@ impl<'a> Component for Counter<'a> {
             Msg::Down | Msg::Left => {
                 self.value = clamp_i32(self.value.saturating_sub(self.step), self.min, self.max);
             }
-            _ => {}
+            // Select is the *form's* to spend (it enters/leaves edit mode via
+            // set_editing); the counter itself has nothing to do with it.
+            _ => return Outcome::Ignored,
         }
         if self.value != before {
             self.dirty.set(true);
+            Outcome::Consumed
+        } else {
+            // Already at min/max: the step had nowhere to go, so the event is
+            // handed back rather than silently absorbed at the bound.
+            Outcome::Ignored
         }
     }
 
@@ -582,9 +617,10 @@ impl<'a> Slider<'a> {
 }
 
 impl<'a> Component for Slider<'a> {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
         let before = self.value;
-        // Symmetric with Counter: both directions clamp against both bounds.
+        // Symmetric with Counter: both directions clamp against both bounds,
+        // a step at the bound is Ignored, and Select belongs to the form.
         match msg {
             Msg::Up | Msg::Right => {
                 self.value = clamp_i32(self.value.saturating_add(self.step), self.min, self.max);
@@ -592,10 +628,13 @@ impl<'a> Component for Slider<'a> {
             Msg::Down | Msg::Left => {
                 self.value = clamp_i32(self.value.saturating_sub(self.step), self.min, self.max);
             }
-            _ => {}
+            _ => return Outcome::Ignored,
         }
         if self.value != before {
             self.dirty.set(true);
+            Outcome::Consumed
+        } else {
+            Outcome::Ignored
         }
     }
 
@@ -740,10 +779,11 @@ impl<'a, T: PickerItem> Picker<'a, T> {
 }
 
 impl<'a, T: PickerItem> Component for Picker<'a, T> {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
         let n = self.options.len();
         if n == 0 {
-            return;
+            // Nothing to pick from: every event stays available to the form.
+            return Outcome::Ignored;
         }
         let before = self.selected;
         match msg {
@@ -765,10 +805,16 @@ impl<'a, T: PickerItem> Component for Picker<'a, T> {
                     0
                 };
             }
-            _ => {}
+            // As with Counter/Slider, Select is the form's (edit mode).
+            _ => return Outcome::Ignored,
         }
         if self.selected != before {
             self.dirty.set(true);
+            Outcome::Consumed
+        } else {
+            // A non-wrapping picker at either end - or a single option, which
+            // has no elsewhere to go - hands the event back.
+            Outcome::Ignored
         }
     }
 
@@ -1038,7 +1084,7 @@ mod tests {
     #[test]
     fn checkbox_select_checks() {
         let mut c = Checkbox::new("WiFi");
-        c.update(&Msg::Select);
+        let _ = c.update(&Msg::Select);
         assert!(c.is_checked());
         let mut t = RecordingTarget::new(120, 10);
         c.view(&mut t, Area::new(0, 0, 120, 10));
@@ -1082,7 +1128,7 @@ mod tests {
     #[test]
     fn toggle_select_turns_on() {
         let mut tg = Toggle::new("Sound");
-        tg.update(&Msg::Select);
+        let _ = tg.update(&Msg::Select);
         assert!(tg.is_on());
         let mut t = RecordingTarget::new(120, 10);
         tg.view(&mut t, Area::new(0, 0, 120, 10));
@@ -1092,9 +1138,9 @@ mod tests {
     #[test]
     fn toggle_left_right() {
         let mut tg = Toggle::new("Sound");
-        tg.update(&Msg::Right);
+        let _ = tg.update(&Msg::Right);
         assert!(tg.is_on());
-        tg.update(&Msg::Left);
+        let _ = tg.update(&Msg::Left);
         assert!(!tg.is_on());
     }
 
@@ -1111,7 +1157,7 @@ mod tests {
     fn button_select_sets_and_take_pressed_clears() {
         let mut b = Button::new("Go");
         assert!(!b.take_pressed());
-        b.update(&Msg::Select);
+        let _ = b.update(&Msg::Select);
         assert!(b.take_pressed());
         // Consumed - a second call without another Select reports false.
         assert!(!b.take_pressed());
@@ -1136,9 +1182,9 @@ mod tests {
     fn button_press_does_not_dirty() {
         let mut b = Button::new("Go");
         b.mark_clean();
-        b.update(&Msg::Up); // not Select → no change
+        let _ = b.update(&Msg::Up); // not Select → no change
         assert!(!b.dirty());
-        b.update(&Msg::Select);
+        let _ = b.update(&Msg::Select);
         assert!(b.take_pressed(), "the press is still latched");
         assert!(!b.dirty(), "a press changes no pixel");
 
@@ -1159,7 +1205,7 @@ mod tests {
         assert_eq!(c.value(), 10);
         // …and one step up lands inside the range, not at 1.
         let mut c = c;
-        c.update(&Msg::Up);
+        let _ = c.update(&Msg::Up);
         assert_eq!(c.value(), 11);
 
         // Above the ceiling, either builder order.
@@ -1179,9 +1225,9 @@ mod tests {
         let s = Slider::new("X").with_range(10, 20).with_value(0);
         assert_eq!(s.value(), 10);
         let mut s = s;
-        s.update(&Msg::Down);
+        let _ = s.update(&Msg::Down);
         assert_eq!(s.value(), 10, "already at the floor");
-        s.update(&Msg::Up);
+        let _ = s.update(&Msg::Up);
         assert_eq!(s.value(), 20, "step 10 from the floor");
 
         assert_eq!(Slider::new("X").with_value(99).with_range(0, 5).value(), 5);
@@ -1201,9 +1247,9 @@ mod tests {
     #[test]
     fn counter_increment_clamps() {
         let mut c = Counter::new("X").with_range(0, 3).with_step(2);
-        c.update(&Msg::Up);
+        let _ = c.update(&Msg::Up);
         assert_eq!(c.value(), 2);
-        c.update(&Msg::Up);
+        let _ = c.update(&Msg::Up);
         assert_eq!(c.value(), 3); // 4 clamped
     }
 
@@ -1249,19 +1295,19 @@ mod tests {
         c.mark_clean();
 
         // No-op messages leave it clean.
-        c.update(&Msg::Select);
-        c.update(&Msg::Tick);
+        let _ = c.update(&Msg::Select);
+        let _ = c.update(&Msg::Tick);
         assert!(!c.dirty());
 
         // A real increment dirties it.
-        c.update(&Msg::Up);
+        let _ = c.update(&Msg::Up);
         assert!(c.dirty());
         c.mark_clean();
 
         // At the clamp ceiling (3), another Up changes nothing → stays clean.
-        c.update(&Msg::Up); // 2 -> 3
+        let _ = c.update(&Msg::Up); // 2 -> 3
         c.mark_clean();
-        c.update(&Msg::Up); // clamped at 3, no change
+        let _ = c.update(&Msg::Up); // clamped at 3, no change
         assert!(!c.dirty());
     }
 
@@ -1269,9 +1315,9 @@ mod tests {
     fn checkbox_dirty_contract() {
         let mut c = Checkbox::new("WiFi");
         c.mark_clean();
-        c.update(&Msg::Up); // not a toggle → no change
+        let _ = c.update(&Msg::Up); // not a toggle → no change
         assert!(!c.dirty());
-        c.update(&Msg::Select); // toggles → dirty
+        let _ = c.update(&Msg::Select); // toggles → dirty
         assert!(c.dirty());
     }
 
@@ -1339,9 +1385,9 @@ mod tests {
             .with_range(0, 100)
             .with_step(10)
             .with_value(95);
-        s.update(&Msg::Up);
+        let _ = s.update(&Msg::Up);
         assert_eq!(s.value(), 100);
-        s.update(&Msg::Up);
+        let _ = s.update(&Msg::Up);
         assert_eq!(s.value(), 100);
     }
 
@@ -1373,10 +1419,10 @@ mod tests {
     #[test]
     fn picker_next_and_wrap() {
         let mut p = Picker::new("M", OPTS);
-        p.update(&Msg::Down);
+        let _ = p.update(&Msg::Down);
         assert_eq!(p.selected_option(), Some(&"Beta"));
         let mut p2 = Picker::new("M", OPTS);
-        p2.update(&Msg::Up);
+        let _ = p2.update(&Msg::Up);
         assert_eq!(p2.selected(), 2); // wrapped
     }
 
@@ -1403,7 +1449,72 @@ mod tests {
     #[test]
     fn picker_empty_safe() {
         let mut p: Picker<'_, &str> = Picker::new("M", &[]);
-        p.update(&Msg::Down);
+        let _ = p.update(&Msg::Down);
         assert_eq!(p.selected_option(), Option::<&&str>::None);
+    }
+
+    // ── Outcome (event routing) ─────────────────────────────────────────────
+
+    /// A button is the plainest `Activated` there is - and the press no longer
+    /// has to be fished out with `take_pressed()`.
+    #[test]
+    fn button_activates_on_select_and_owns_nothing_else() {
+        let mut b = Button::new("Go");
+        assert_eq!(b.update(&Msg::Up), Outcome::Ignored);
+        assert_eq!(b.update(&Msg::Down), Outcome::Ignored);
+        assert_eq!(b.update(&Msg::Select), Outcome::Activated);
+        assert!(b.take_pressed(), "the old latch still works alongside it");
+    }
+
+    /// Flipping itself is internal state, not an app-level action.
+    #[test]
+    fn checkbox_and_toggle_consume_select_and_pass_up_down_on() {
+        let mut cb = Checkbox::new("A");
+        assert_eq!(cb.update(&Msg::Select), Outcome::Consumed);
+        assert_eq!(cb.update(&Msg::Up), Outcome::Ignored);
+        assert_eq!(cb.update(&Msg::Down), Outcome::Ignored);
+
+        let mut tg = Toggle::new("B");
+        assert_eq!(tg.update(&Msg::Select), Outcome::Consumed);
+        assert_eq!(tg.update(&Msg::Up), Outcome::Ignored);
+        // Left/Right set an absolute state: asking for the state it is already
+        // in is an edge like any other.
+        assert_eq!(tg.update(&Msg::Right), Outcome::Ignored, "already on");
+        assert_eq!(tg.update(&Msg::Left), Outcome::Consumed, "turned off");
+    }
+
+    #[test]
+    fn counter_and_slider_spend_a_step_and_hand_back_a_bound() {
+        let mut c = Counter::new("N").with_range(0, 2).with_value(0);
+        assert_eq!(c.update(&Msg::Down), Outcome::Ignored, "already at min");
+        assert_eq!(c.update(&Msg::Up), Outcome::Consumed);
+        assert_eq!(c.update(&Msg::Up), Outcome::Consumed);
+        assert_eq!(c.update(&Msg::Up), Outcome::Ignored, "already at max");
+        // Select is the form's: it enters/leaves edit mode, the counter does
+        // not act on it.
+        assert_eq!(c.update(&Msg::Select), Outcome::Ignored);
+
+        let mut s = Slider::new("V").with_range(0, 10).with_step(10);
+        assert_eq!(s.update(&Msg::Down), Outcome::Ignored, "already at min");
+        assert_eq!(s.update(&Msg::Up), Outcome::Consumed);
+        assert_eq!(s.update(&Msg::Up), Outcome::Ignored, "already at max");
+    }
+
+    #[test]
+    fn picker_hands_back_its_ends_unless_it_wraps() {
+        const OPTS: [&str; 2] = ["A", "B"];
+        // Wrap is on by default, so the non-wrapping case has to ask for it.
+        let mut p = Picker::new("P", &OPTS).with_wrap(false);
+        assert_eq!(p.update(&Msg::Up), Outcome::Ignored, "already first");
+        assert_eq!(p.update(&Msg::Down), Outcome::Consumed);
+        assert_eq!(p.update(&Msg::Down), Outcome::Ignored, "already last");
+
+        let mut w = Picker::new("P", &OPTS);
+        assert_eq!(w.update(&Msg::Up), Outcome::Consumed, "wraps to the last");
+        assert_eq!(
+            w.update(&Msg::Down),
+            Outcome::Consumed,
+            "wraps to the first"
+        );
     }
 }

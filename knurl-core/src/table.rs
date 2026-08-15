@@ -1,7 +1,7 @@
 use core::cell::Cell;
 
 use crate::{
-    Area, Component, Marker, Msg, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band,
+    Area, Component, Marker, Msg, Outcome, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band,
     draw_v_scroll,
 };
 
@@ -169,10 +169,11 @@ impl<'a, M: TableModel + ?Sized> Table<'a, M> {
 }
 
 impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
-    fn update(&mut self, msg: &Msg) {
+    fn update(&mut self, msg: &Msg) -> Outcome {
         let n = self.model.row_count();
         if n == 0 {
-            return;
+            // No rows: every event stays available to the container.
+            return Outcome::Ignored;
         }
         let page = self.page_size.get().max(1);
         match msg {
@@ -182,6 +183,7 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
                     self.offset = self.selected + 1 - page;
                 }
                 self.dirty.set(true);
+                Outcome::Consumed
             }
             Msg::Up if self.selected > 0 => {
                 self.selected -= 1;
@@ -189,10 +191,13 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
                     self.offset = self.selected;
                 }
                 self.dirty.set(true);
+                Outcome::Consumed
             }
-            // Everything else - Select, a clamped end, a tick - changes no
-            // pixel, so the gate stays clean and an idle frame skips the table.
-            _ => {}
+            // Picking the highlighted row changes no pixel, so the gate stays
+            // clean - but it is the choice the app acts on (it reads selected()).
+            Msg::Select => Outcome::Activated,
+            // A clamped end or a tick: nothing here, hand the event back.
+            _ => Outcome::Ignored,
         }
     }
 
@@ -405,7 +410,7 @@ mod tests {
     #[test]
     fn table_navigation_and_selected_row() {
         let mut table = Table::new(ROWS, WIDTHS);
-        table.update(&Msg::Down);
+        let _ = table.update(&Msg::Down);
         assert_eq!(table.selected(), 1);
     }
 
@@ -418,8 +423,8 @@ mod tests {
         table.view(&mut t, Area::new(0, 0, 80, 20)); // page ← 2
         assert!(fills(&t).iter().any(|(_, st)| *st == Style::Focus)); // thumb present
 
-        table.update(&Msg::Down);
-        table.update(&Msg::Down); // selected 2 → offset advances
+        let _ = table.update(&Msg::Down);
+        let _ = table.update(&Msg::Down); // selected 2 → offset advances
         assert_eq!(table.offset(), 1);
         let mut t2 = RecordingTarget::new(80, 20);
         table.view(&mut t2, Area::new(0, 0, 80, 20));
@@ -501,7 +506,7 @@ mod tests {
     #[test]
     fn unfocused_table_shows_the_cursor_marker() {
         let mut table = Table::new(ROWS, WIDTHS);
-        table.update(&Msg::Down); // cursor on "Beta"
+        let _ = table.update(&Msg::Down); // cursor on "Beta"
         let mut t = RecordingTarget::new(80, 50);
         table.view(&mut t, Area::new(0, 0, 80, 50));
 
@@ -601,12 +606,12 @@ mod tests {
         table.mark_clean();
 
         // Nothing that changes no state may dirty it.
-        table.update(&Msg::Select);
-        table.update(&Msg::Tick);
-        table.update(&Msg::Up); // already on the first row
+        let _ = table.update(&Msg::Select);
+        let _ = table.update(&Msg::Tick);
+        let _ = table.update(&Msg::Up); // already on the first row
         assert!(!table.dirty());
 
-        table.update(&Msg::Down);
+        let _ = table.update(&Msg::Down);
         assert!(table.dirty());
         table.mark_clean();
 
@@ -630,9 +635,54 @@ mod tests {
         table.view(&mut t0, area);
         assert!(!t0.ops().is_empty());
 
-        table.update(&Msg::Select); // no-op
+        let _ = table.update(&Msg::Select); // no-op
         let mut t1 = RecordingTarget::new(80, 50);
         table.view(&mut t1, area);
         assert!(t1.ops().is_empty());
+    }
+
+    // ── Outcome (event routing) ─────────────────────────────────────────────
+
+    #[test]
+    fn table_spends_a_step_and_hands_back_an_edge() {
+        let mut table = Table::new(ROWS, WIDTHS);
+        assert_eq!(
+            table.update(&Msg::Up),
+            Outcome::Ignored,
+            "Up at the first row"
+        );
+        assert_eq!(
+            table.update(&Msg::Down),
+            Outcome::Consumed,
+            "a step in the middle"
+        );
+        while table.selected() + 1 < ROWS.len() {
+            assert_eq!(table.update(&Msg::Down), Outcome::Consumed);
+        }
+        assert_eq!(
+            table.update(&Msg::Down),
+            Outcome::Ignored,
+            "Down at the last row"
+        );
+    }
+
+    #[test]
+    fn table_select_activates() {
+        let mut table = Table::new(ROWS, WIDTHS);
+        assert_eq!(table.update(&Msg::Select), Outcome::Activated);
+        assert_eq!(table.update(&Msg::Tick), Outcome::Ignored);
+    }
+
+    #[test]
+    fn empty_table_hands_back_everything() {
+        const NONE: &[[&str; 2]] = &[];
+        let mut table = Table::new(NONE, WIDTHS);
+        for msg in [Msg::Up, Msg::Down, Msg::Select, Msg::Tick] {
+            assert_eq!(
+                table.update(&msg),
+                Outcome::Ignored,
+                "{msg:?} on an empty table"
+            );
+        }
     }
 }

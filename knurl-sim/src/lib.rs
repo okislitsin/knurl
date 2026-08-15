@@ -26,7 +26,7 @@
 //! let items = ["Alpha", "Beta", "Gamma"];
 //! let mut list = List::new(&items);
 //! sim.run(|target, msgs| {
-//!     for m in msgs { list.update(m); }
+//!     for m in msgs { let _ = list.update(m); }
 //!     list.view(target, Area::new(0, 0, 21, 12));
 //! });
 //! ```
