@@ -5,6 +5,12 @@
 //!   selection `push`es a component page; every page has a focusable `< Back`
 //!   item that `pop`s; the root `Exit` quits via [`Frame::Quit`]. **Back is always
 //!   a separate item, never inside a widget's data.**
+//! - Input is routed by [`FocusChain`]: each page lists its focus zones once
+//!   (see `Demo::with_zones`) and the chain walks the cursor between them, so
+//!   "`Down` past the end of the list lands on `< Back`" is not page code. The
+//!   application only acts on what comes back out - an `Activated` from the
+//!   last zone is a `pop`. Tabs are a [`TabPages`]: rotation switches tabs,
+//!   `Select` would enter the page under them.
 //! - Rendered through the **dirty-gated partial-redraw loop**
 //!   ([`Simulator::run_gated`]): idle frames are skipped, and a painted frame
 //!   redraws only what changed (an animating `Spinner` repaints its own area, not
@@ -26,10 +32,10 @@ use core::cell::Cell;
 use knurl_sim::core::{
     Align, Area, BarChart, BorderStyle, Button, Checkbox, Component,
     Constraint::{Fill, Length},
-    Counter, Dialog, Form, FormField, HStack, Help, Label, LineGauge, List, Msg, Padded, Padding,
-    Pager, Paginator, Picker, ProgressBar, Radio, RenderTarget, Router, Scrollbar, Separator,
-    Slider, Spinner, StatusBar, Style, Table, Tabs, TextInput, Title, Toggle, Tree, TreeItem,
-    VStack,
+    Counter, Dialog, Entry, FocusChain, FocusZone, Form, FormField, HStack, Help, Label, LineGauge,
+    List, Msg, Outcome, Padded, Padding, Pager, Paginator, Picker, ProgressBar, Radio,
+    RenderTarget, Router, Scrollbar, Separator, Slider, Spinner, StatusBar, Style, TabPages, Table,
+    Tabs, TextInput, Title, Toggle, Tree, TreeItem, VStack,
 };
 use knurl_sim::{Frame, SimConfig, Simulator};
 
@@ -240,13 +246,68 @@ fn animated(p: Page) -> bool {
     matches!(p, Page::BarChartP | Page::Indicators)
 }
 
+/// Field count of the pages built on a [`Form`] (`0` = not a form page). The
+/// `< Back` button is always the **last** field, which is how an `Activated`
+/// coming out of the form is told apart from one raised by a field.
+fn form_len(p: Page) -> usize {
+    match p {
+        Page::Toggles | Page::FormP => 3,
+        Page::Editors => 4,
+        Page::TextInputP => 2,
+        _ => 0,
+    }
+}
+
+// ── App-side focus zones ───────────────────────────────────────────────────────
+
+/// The row-stack and Position pages scroll a window over rows they draw by
+/// hand, so there is no widget to put on the chain - this is the zone for them.
+///
+/// It is the whole contract: spend an event while the window can still move,
+/// hand it back at either end. The chain does the rest, and "`Down` at the
+/// bottom lands on `< Back`" needs no code here at all.
+struct ScrollZone<'a> {
+    offset: &'a mut usize,
+    max: usize,
+}
+
+impl FocusZone for ScrollZone<'_> {
+    fn handle(&mut self, msg: &Msg) -> Outcome {
+        match msg {
+            Msg::Up if *self.offset > 0 => {
+                *self.offset -= 1;
+                Outcome::Consumed
+            }
+            Msg::Down if *self.offset < self.max => {
+                *self.offset += 1;
+                Outcome::Consumed
+            }
+            _ => Outcome::Ignored,
+        }
+    }
+}
+
+/// The Tabs page shows static text, so the page behind the strip is a zone the
+/// focus can never enter: `Select` on the strip reports `Ignored` and nothing
+/// opens - which is [`TabPages`]' contract for a tab with nothing to focus.
+struct StaticPage;
+
+impl FocusZone for StaticPage {
+    fn handle(&mut self, _msg: &Msg) -> Outcome {
+        Outcome::Ignored
+    }
+    fn is_focusable(&self) -> bool {
+        false
+    }
+}
+
 struct Demo {
     router: Router<Page, 4>,
+    chain: FocusChain,
+    tab_pages: TabPages,
     title: Title<'static>,
     menu: List<'static>,
 
-    // Two-zone Back state for the navigable / static pages.
-    on_back: bool,
     scroll: usize,
     vis: Cell<usize>, // visible stack rows, cached by view() for update()'s clamp
 
@@ -289,9 +350,10 @@ impl Demo {
     fn new() -> Self {
         let mut d = Self {
             router: Router::new(Page::Menu),
+            chain: FocusChain::new(),
+            tab_pages: TabPages::new(),
             title: Title::new(title_for(Page::Menu)).with_align(Align::Center),
             menu: List::new(MENU),
-            on_back: false,
             scroll: 0,
             vis: Cell::new(4),
             list: List::new(LIST_ITEMS),
@@ -327,7 +389,7 @@ impl Demo {
             repaint: true,
             quit: false,
         };
-        d.menu.focus();
+        d.on_enter(Page::Menu);
         d
     }
 
@@ -335,52 +397,148 @@ impl Demo {
         self.router.current()
     }
 
-    /// Enters `page`: reset transient state, sync any form focus, mark the page's
-    /// Cell-backed widgets dirty, and force a clean full redraw.
+    /// The page's focus zones, in reading order, built for the length of one
+    /// call - the same array serves routing, focus placement and invalidation,
+    /// so a page describes its focus order exactly once.
+    ///
+    /// **`< Back` is always the last zone** (or, on a form page, the last
+    /// field): that is the demo's whole navigation convention, and the only
+    /// thing [`Demo::handle`] needs to know about a page.
+    fn with_zones<R>(
+        &mut self,
+        f: impl FnOnce(&mut FocusChain, &mut [&mut dyn FocusZone]) -> R,
+    ) -> R {
+        let page = self.router.current();
+        let vis = self.vis.get().max(1);
+        let Self {
+            chain,
+            tab_pages,
+            menu,
+            scroll,
+            list,
+            tree,
+            table,
+            radio,
+            pager,
+            help,
+            dialog,
+            tabs,
+            form,
+            back,
+            chk,
+            tog,
+            counter,
+            slider,
+            picker,
+            fan,
+            level,
+            input,
+            pos_offset,
+            ..
+        } = self;
+
+        match page {
+            Page::Menu => f(chain, &mut [menu]),
+
+            // Form pages: Back is the form's last field, so the whole form is
+            // one zone on the chain.
+            Page::Toggles => {
+                let mut fields: [&mut dyn FormField; 3] = [chk, tog, back];
+                let mut zone = form.zone(&mut fields);
+                f(chain, &mut [&mut zone])
+            }
+            Page::Editors => {
+                let mut fields: [&mut dyn FormField; 4] = [counter, slider, picker, back];
+                let mut zone = form.zone(&mut fields);
+                f(chain, &mut [&mut zone])
+            }
+            Page::TextInputP => {
+                let mut fields: [&mut dyn FormField; 2] = [input, back];
+                let mut zone = form.zone(&mut fields);
+                f(chain, &mut [&mut zone])
+            }
+            Page::FormP => {
+                let mut fields: [&mut dyn FormField; 3] = [fan, level, back];
+                let mut zone = form.zone(&mut fields);
+                f(chain, &mut [&mut zone])
+            }
+
+            // Widget pages: the widget, then Back.
+            Page::ListP => f(chain, &mut [list, back]),
+            Page::TreeP => f(chain, &mut [tree, back]),
+            Page::TableP => f(chain, &mut [table, back]),
+            Page::RadioP => f(chain, &mut [radio, back]),
+            Page::PagerP => f(chain, &mut [pager, back]),
+            Page::HelpP => f(chain, &mut [help, back]),
+            Page::DialogP => f(chain, &mut [dialog, back]),
+
+            // Hand-drawn scrolling pages: the app's own zone, then Back.
+            Page::Text => f(
+                chain,
+                &mut [
+                    &mut ScrollZone {
+                        offset: scroll,
+                        max: 9usize.saturating_sub(vis),
+                    },
+                    back,
+                ],
+            ),
+            Page::Indicators => f(
+                chain,
+                &mut [
+                    &mut ScrollZone {
+                        offset: scroll,
+                        max: 6usize.saturating_sub(vis),
+                    },
+                    back,
+                ],
+            ),
+            Page::Position => f(
+                chain,
+                &mut [
+                    &mut ScrollZone {
+                        offset: pos_offset,
+                        max: POS_ROWS.len().saturating_sub(vis),
+                    },
+                    back,
+                ],
+            ),
+
+            // The tab strip and its (static) page are one zone; Back below it.
+            Page::TabsP => {
+                let mut page = StaticPage;
+                let mut zone = tab_pages.zone(tabs, &mut page);
+                f(chain, &mut [&mut zone, back])
+            }
+
+            // Static pages: Back is all there is.
+            Page::BarChartP | Page::StatusBarP | Page::Layout => f(chain, &mut [back]),
+        }
+    }
+
+    /// Enters `page`: reset transient state, place the focus on the page's first
+    /// zone, mark everything on it dirty, and force a clean full redraw.
     fn on_enter(&mut self, page: Page) {
-        self.on_back = false;
         self.scroll = 0;
         self.force = true;
         self.repaint = true;
         self.title.set_text(title_for(page));
         match page {
-            Page::Menu => self.menu.mark_dirty(),
-            Page::ListP => self.list.mark_dirty(),
-            Page::Indicators => self.spinner.mark_dirty(),
-            Page::DialogP => {
-                self.dialog.reset();
-                self.dialog.mark_dirty();
-            }
-            Page::Toggles => {
-                self.form = Form::new();
-                let mut f: [&mut dyn FormField; 3] = [&mut self.chk, &mut self.tog, &mut self.back];
-                self.form.sync_focus(&mut f);
-            }
-            Page::Editors => {
-                self.form = Form::new();
-                let mut f: [&mut dyn FormField; 4] = [
-                    &mut self.counter,
-                    &mut self.slider,
-                    &mut self.picker,
-                    &mut self.back,
-                ];
-                self.form.sync_focus(&mut f);
-            }
-            Page::TextInputP => {
-                self.input.reset();
-                self.form = Form::new();
-                let mut f: [&mut dyn FormField; 2] = [&mut self.input, &mut self.back];
-                self.form.sync_focus(&mut f);
-            }
-            Page::FormP => {
-                self.form = Form::new();
-                let mut f: [&mut dyn FormField; 3] =
-                    [&mut self.fan, &mut self.level, &mut self.back];
-                self.form.sync_focus(&mut f);
-            }
+            Page::Indicators => self.spinner.mark_dirty(), // drawn inside the stack
+            Page::DialogP => self.dialog.reset(),
+            Page::TextInputP => self.input.reset(),
             Page::TabsP => self.tabs.set_selected(0),
             _ => {}
         }
+        if form_len(page) > 0 {
+            self.form = Form::new();
+        }
+        // `focus_zone` rather than `sync_focus`: the zone set changed under the
+        // chain (a different page), and only an explicit placement re-enters.
+        self.with_zones(|chain, z| {
+            chain.focus_zone(0, Entry::Top, z);
+            chain.mark_dirty(z);
+        });
     }
 
     fn push(&mut self, page: Page) {
@@ -419,291 +577,40 @@ impl Demo {
         // Any key press repaints (cheap: a clean widget's view still self-gates).
         self.repaint = true;
 
+        // One line of routing for every page: the chain walks the focus between
+        // the page's zones, and only what it hands back is the app's business.
+        let (outcome, zones) = self.with_zones(|chain, z| (chain.update(msg, z), z.len()));
+        if outcome != Outcome::Activated {
+            // Consumed: the page used it. Ignored: the cursor is at the edge of
+            // the screen - on encoder hardware that is simply the end of the
+            // road, since leaving a page is the `< Back` item's job.
+            return;
+        }
+
         match self.page() {
-            Page::Menu => match msg {
-                Msg::Select => match page_for(self.menu.selected()) {
-                    Some(p) => self.push(p),
-                    None => self.quit = true,
-                },
-                _ => {
-                    let _ = self.menu.update(msg);
-                }
+            // The root menu has no Back: a row opens a page, the last one exits.
+            Page::Menu => match page_for(self.menu.selected()) {
+                Some(p) => self.push(p),
+                None => self.quit = true,
             },
-
-            // Form pages: the Back is a focusable Button field inside the form.
-            Page::Toggles => {
-                {
-                    let mut f: [&mut dyn FormField; 3] =
-                        [&mut self.chk, &mut self.tog, &mut self.back];
-                    let _ = self.form.update(msg, &mut f);
-                }
-                self.pop_if_back();
-            }
-            Page::Editors => {
-                {
-                    let mut f: [&mut dyn FormField; 4] = [
-                        &mut self.counter,
-                        &mut self.slider,
-                        &mut self.picker,
-                        &mut self.back,
-                    ];
-                    let _ = self.form.update(msg, &mut f);
-                }
-                self.pop_if_back();
-            }
-            Page::TextInputP => {
-                {
-                    let mut f: [&mut dyn FormField; 2] = [&mut self.input, &mut self.back];
-                    let _ = self.form.update(msg, &mut f);
-                }
-                self.pop_if_back();
-            }
-            Page::FormP => {
-                {
-                    let mut f: [&mut dyn FormField; 3] =
-                        [&mut self.fan, &mut self.level, &mut self.back];
-                    let _ = self.form.update(msg, &mut f);
-                }
-                self.pop_if_back();
-            }
-
-            // Navigable widget pages: two-zone Back (Down past the end → Back).
-            Page::ListP => {
-                let before = self.list.selected();
-                if self.zone_nav(
-                    msg,
-                    before,
-                    |s| {
-                        let _ = s.list.update(&Msg::Down);
-                    },
-                    |s| s.list.selected(),
-                ) {
-                    let _ = self.list.update(&Msg::Up);
-                }
-            }
-            Page::TreeP => {
-                let before = self.tree.selected();
-                if self.zone_nav(
-                    msg,
-                    before,
-                    |s| {
-                        let _ = s.tree.update(&Msg::Down);
-                    },
-                    |s| s.tree.selected(),
-                ) {
-                    let _ = self.tree.update(&Msg::Up);
-                }
-                if !self.on_back && matches!(msg, Msg::Select) {
-                    let _ = self.tree.update(&Msg::Select); // expand / collapse
-                }
-            }
-            Page::TableP => {
-                let before = self.table.selected();
-                self.zone_nav(
-                    msg,
-                    before,
-                    |s| {
-                        let _ = s.table.update(&Msg::Down);
-                    },
-                    |s| s.table.selected(),
-                );
-                if matches!(msg, Msg::Up) && !self.on_back {
-                    let _ = self.table.update(&Msg::Up);
-                }
-            }
-            Page::RadioP => {
-                let before = self.radio.cursor();
-                self.zone_nav(
-                    msg,
-                    before,
-                    |s| {
-                        let _ = s.radio.update(&Msg::Down);
-                    },
-                    |s| s.radio.cursor(),
-                );
-                if !self.on_back {
-                    match msg {
-                        Msg::Up => {
-                            let _ = self.radio.update(&Msg::Up);
-                        }
-                        Msg::Select => {
-                            let _ = self.radio.update(&Msg::Select);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Page::PagerP => {
-                let before = self.pager.offset();
-                self.zone_nav(
-                    msg,
-                    before,
-                    |s| {
-                        let _ = s.pager.update(&Msg::Down);
-                    },
-                    |s| s.pager.offset(),
-                );
-                if matches!(msg, Msg::Up) && !self.on_back {
-                    let _ = self.pager.update(&Msg::Up);
-                }
-            }
-            Page::HelpP => {
-                let before = self.help.offset();
-                self.zone_nav(
-                    msg,
-                    before,
-                    |s| {
-                        let _ = s.help.update(&Msg::Down);
-                    },
-                    |s| s.help.offset(),
-                );
-                if matches!(msg, Msg::Up) && !self.on_back {
-                    let _ = self.help.update(&Msg::Up);
-                }
-            }
-
-            // Scrollable row-stack pages.
-            Page::Text => self.stack_nav(msg, 9),
-            Page::Indicators => self.stack_nav(msg, 6),
-
-            // Position: scroll a window, then Back.
-            Page::Position => match msg {
-                Msg::Up => {
-                    if self.on_back {
-                        self.on_back = false;
-                    } else {
-                        self.pos_offset = self.pos_offset.saturating_sub(1);
-                    }
-                }
-                Msg::Down => {
-                    if !self.on_back {
-                        if self.pos_offset + self.vis.get() < POS_ROWS.len() {
-                            self.pos_offset += 1;
-                        } else {
-                            self.on_back = true;
-                        }
-                    }
-                }
-                Msg::Select if self.on_back => self.pop(),
-                _ => {}
-            },
-
-            // Tabs: Select cycles the active tab; Down → Back; Select on Back pops.
-            Page::TabsP => match msg {
-                Msg::Up => self.on_back = false,
-                Msg::Down => self.on_back = true,
-                Msg::Select => {
-                    if self.on_back {
-                        self.pop();
-                    } else {
-                        self.tabs.next();
-                    }
-                }
-                _ => {}
-            },
-
-            // Static pages: the only focusable item is Back.
-            Page::BarChartP | Page::StatusBarP | Page::Layout => match msg {
-                Msg::Up => self.on_back = false,
-                Msg::Down => self.on_back = true,
-                Msg::Select if self.on_back => self.pop(),
-                _ => {}
-            },
-
-            // Dialog: navigate buttons, Down past the last → Back, Select confirms.
-            Page::DialogP => {
-                let before = self.dialog.selected();
-                self.zone_nav(
-                    msg,
-                    before,
-                    |s| {
-                        let _ = s.dialog.update(&Msg::Down);
-                    },
-                    |s| s.dialog.selected(),
-                );
-                if !self.on_back {
-                    match msg {
-                        Msg::Up => {
-                            let _ = self.dialog.update(&Msg::Up);
-                        }
-                        Msg::Select => {
-                            let _ = self.dialog.update(&Msg::Select);
-                            if self.dialog.is_confirmed() {
-                                self.pop();
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-
-    /// Shared "Down past the end → Back, Select on Back → pop" rule. Returns
-    /// `true` when the caller should still apply an `Up` to its widget (i.e. an
-    /// `Up` while in the body zone). `advance` performs the widget's `Down`;
-    /// `pos` reads the widget's position before/after to detect "couldn't move".
-    fn zone_nav(
-        &mut self,
-        msg: &Msg,
-        before: usize,
-        advance: impl FnOnce(&mut Self),
-        pos: impl FnOnce(&Self) -> usize,
-    ) -> bool {
-        match msg {
-            Msg::Up => {
-                if self.on_back {
-                    self.on_back = false;
-                    false
-                } else {
-                    true // caller applies the Up to its widget
-                }
-            }
-            Msg::Down => {
-                if !self.on_back {
-                    advance(self);
-                    if pos(self) == before {
-                        self.on_back = true;
-                    }
-                }
-                false
-            }
-            Msg::Select if self.on_back => {
-                self.pop();
-                false
-            }
-            _ => false,
-        }
-    }
-
-    fn stack_nav(&mut self, msg: &Msg, total: usize) {
-        let vis = self.vis.get().max(1);
-        let max = total.saturating_sub(vis);
-        match msg {
-            Msg::Up => {
-                if self.on_back {
-                    self.on_back = false;
-                } else {
-                    self.scroll = self.scroll.saturating_sub(1);
-                }
-            }
-            Msg::Down => {
-                if !self.on_back {
-                    if self.scroll < max {
-                        self.scroll += 1;
-                    } else {
-                        self.on_back = true;
-                    }
-                }
-            }
-            Msg::Select if self.on_back => self.pop(),
+            // Either dialog button closes the modal (which one is the app's to
+            // read via `selected_button`; this demo does not care).
+            Page::DialogP if !self.back_activated(zones) => self.pop(),
+            // Everywhere else the only thing that activates is `< Back`.
+            _ if self.back_activated(zones) => self.pop(),
             _ => {}
         }
     }
 
-    fn pop_if_back(&mut self) {
-        if self.back.take_pressed() {
-            self.pop();
+    /// Whether the `Activated` just seen came from the page's `< Back` item.
+    ///
+    /// `Outcome` says *that* something was activated, not *what*: the focus
+    /// index is what says which. Two levels answer it - the chain for a page's
+    /// zones, the form for a form page's fields.
+    fn back_activated(&self, zones: usize) -> bool {
+        match form_len(self.page()) {
+            0 => self.chain.focus_index() + 1 == zones,
+            fields => self.form.focus_index() + 1 == fields,
         }
     }
 
@@ -820,13 +727,10 @@ impl Demo {
         self.draw_back(target, back);
     }
 
+    /// The `< Back` item is the real [`Button`] the chain is focusing, so it
+    /// draws itself in the focus language - no page-side state to mirror.
     fn draw_back(&self, target: &mut dyn RenderTarget, area: Area) {
-        let style = if self.on_back {
-            Style::Focus
-        } else {
-            Style::Muted
-        };
-        Label::new("< Back").with_style(style).view(target, area);
+        self.back.view(target, area);
     }
 
     fn view_tabs(&self, target: &mut dyn RenderTarget, area: Area) {
