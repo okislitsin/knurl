@@ -141,6 +141,9 @@ pub struct Pager<'a, M: LinesModel + ?Sized = [&'a str]> {
     // Cached from view() so the next update() can clamp/tail without the target.
     page_rows: Cell<usize>,
     wrap_cols: Cell<usize>,
+    // Repaint gate: set when the offset or the follow flag actually moves.
+    // Starts dirty so the first frame always draws.
+    dirty: Cell<bool>,
 }
 
 impl<'a, M: LinesModel + ?Sized> Pager<'a, M> {
@@ -151,6 +154,7 @@ impl<'a, M: LinesModel + ?Sized> Pager<'a, M> {
             follow: false,
             page_rows: Cell::new(usize::MAX),
             wrap_cols: Cell::new(usize::MAX),
+            dirty: Cell::new(true),
         }
     }
 
@@ -236,6 +240,10 @@ impl<'a, M: LinesModel + ?Sized> Pager<'a, M> {
 
 impl<'a, M: LinesModel + ?Sized> Component for Pager<'a, M> {
     fn update(&mut self, msg: &Msg) {
+        // Tail mode ticks constantly, so the gate has to be honest about it: a
+        // tick that drags the view down repaints, one that finds no new lines
+        // does not - otherwise a UART pager would repaint on every tick forever.
+        let before = (self.offset, self.follow);
         let max = self.max_offset();
         if self.offset > max {
             self.offset = max;
@@ -259,6 +267,9 @@ impl<'a, M: LinesModel + ?Sized> Component for Pager<'a, M> {
         // While following, stay pinned to the (possibly grown) bottom.
         if self.follow {
             self.offset = self.max_offset();
+        }
+        if (self.offset, self.follow) != before {
+            self.dirty.set(true);
         }
     }
 
@@ -316,6 +327,18 @@ impl<'a, M: LinesModel + ?Sized> Component for Pager<'a, M> {
             sb.set(total, rows, before);
             sb.view(target, Area::new(area.x + area.w - 3, area.y, 3, area.h));
         }
+    }
+
+    fn dirty(&self) -> bool {
+        self.dirty.get()
+    }
+
+    fn mark_clean(&self) {
+        self.dirty.set(false);
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.set(true);
     }
 }
 
@@ -487,5 +510,54 @@ mod tests {
         p.view(&mut t, Area::new(0, 0, 60, 30));
         // Partial-redraw: view() clears its own area but draws no lines.
         assert!(t.ops().iter().all(|op| matches!(op, Op::Clear { .. })));
+    }
+
+    // ── Dirty gate ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn pager_dirty_gate() {
+        let mut p = Pager::new(LINES);
+        let mut t = RecordingTarget::new(120, 30); // 3 rows
+        p.view(&mut t, Area::new(0, 0, 120, 30));
+        assert!(!p.dirty(), "view() leaves it clean");
+
+        p.update(&Msg::Up); // already at the top, and follow is already off
+        p.update(&Msg::Tick);
+        assert!(!p.dirty());
+
+        p.update(&Msg::Down); // scrolls
+        assert!(p.dirty());
+        p.mark_clean();
+
+        for _ in 0..10 {
+            p.update(&Msg::Down); // reaches the bottom, engaging follow
+        }
+        p.mark_clean();
+        p.update(&Msg::Down); // pinned at the bottom, nothing moves
+        assert!(!p.dirty());
+
+        p.mark_dirty();
+        assert!(p.dirty());
+    }
+
+    /// Tail mode: a tick that drags the view down must dirty; one that does not
+    /// must leave it clean, or a UART pager would repaint every tick forever.
+    #[test]
+    fn pager_follow_dirties_only_when_the_bottom_moves() {
+        let s = Stream {
+            count: Cell::new(10),
+        };
+        let mut p = Pager::new(&s).with_follow(true);
+        let mut t = RecordingTarget::new(60, 30);
+        p.view(&mut t, Area::new(0, 0, 60, 30));
+        p.update(&Msg::Tick); // pins to the bottom
+        p.mark_clean();
+
+        p.update(&Msg::Tick); // nothing new arrived
+        assert!(!p.dirty());
+
+        s.count.set(15); // five new lines
+        p.update(&Msg::Tick);
+        assert!(p.dirty());
     }
 }

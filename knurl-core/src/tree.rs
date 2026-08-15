@@ -100,6 +100,9 @@ pub struct Tree<'a, M: TreeModel + ?Sized = [TreeItem<'a>]> {
     focused: bool,
     indent: u16,
     page_size: Cell<usize>,
+    // Repaint gate: set when the selection, the scroll offset, the expansion
+    // mask or focus changes. Starts dirty so the first frame always draws.
+    dirty: Cell<bool>,
 }
 
 impl<'a, M: TreeModel + ?Sized> Tree<'a, M> {
@@ -112,6 +115,7 @@ impl<'a, M: TreeModel + ?Sized> Tree<'a, M> {
             focused: false,
             indent: 8, // per-depth indent, in pixels
             page_size: Cell::new(usize::MAX),
+            dirty: Cell::new(true),
         }
     }
 
@@ -261,6 +265,11 @@ impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
         if self.model.item_count() == 0 {
             return;
         }
+        // Navigation, expansion and scrolling all read out of three fields;
+        // comparing them afterwards is cheaper than threading a flag through
+        // every arm - and it cannot forget one. Re-expanding an already open
+        // node, or Up at the top, leaves all three alone and stays clean.
+        let before = (self.selected, self.offset, self.expanded);
         match msg {
             Msg::Down => {
                 if let Some(n) = self.next_visible(self.selected) {
@@ -287,6 +296,9 @@ impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
                 self.set_expanded(self.selected, !e);
             }
             _ => {}
+        }
+        if (self.selected, self.offset, self.expanded) != before {
+            self.dirty.set(true);
         }
     }
 
@@ -375,10 +387,24 @@ impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
 
     fn focus(&mut self) {
         self.focused = true;
+        self.dirty.set(true); // focus decides whether the cursor row bands
     }
 
     fn blur(&mut self) {
         self.focused = false;
+        self.dirty.set(true);
+    }
+
+    fn dirty(&self) -> bool {
+        self.dirty.get()
+    }
+
+    fn mark_clean(&self) {
+        self.dirty.set(false);
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.set(true);
     }
 }
 
@@ -592,5 +618,51 @@ mod tests {
         let mut t = RecordingTarget::new(120, 30);
         tree.view(&mut t, Area::new(0, 0, 120, 30));
         assert!(texts(&t).iter().any(|(_, _, s, _)| s == "a"));
+    }
+
+    // ── Dirty gate ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn tree_dirty_gate() {
+        let mut tree = Tree::new(ITEMS);
+        assert!(tree.dirty());
+        tree.mark_clean();
+
+        // Up at the top, Left on a collapsed node, Select on a leaf: no state
+        // moves, so the picture does not change.
+        tree.update(&Msg::Up);
+        tree.update(&Msg::Left);
+        tree.update(&Msg::Tick);
+        assert!(!tree.dirty());
+
+        tree.update(&Msg::Right); // expands "Settings"
+        assert!(tree.dirty());
+        tree.mark_clean();
+        tree.update(&Msg::Right); // already expanded → no change
+        assert!(!tree.dirty());
+
+        tree.update(&Msg::Down); // moves to "Display"
+        assert!(tree.dirty());
+        tree.mark_clean();
+
+        tree.focus();
+        assert!(tree.dirty());
+        tree.mark_clean();
+        tree.blur();
+        assert!(tree.dirty());
+    }
+
+    #[test]
+    fn tree_clean_view_draws_nothing() {
+        let mut tree = Tree::new(ITEMS);
+        let area = Area::new(0, 0, 160, 80);
+        let mut t0 = RecordingTarget::new(160, 80);
+        tree.view(&mut t0, area);
+        assert!(!t0.ops().is_empty());
+
+        tree.update(&Msg::Up); // clamped at the top
+        let mut t1 = RecordingTarget::new(160, 80);
+        tree.view(&mut t1, area);
+        assert!(t1.ops().is_empty());
     }
 }

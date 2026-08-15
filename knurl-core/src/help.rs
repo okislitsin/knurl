@@ -29,6 +29,9 @@ pub struct Help<'a> {
     key_w: u16,
     offset: usize,
     page_size: Cell<usize>,
+    // Repaint gate: set when the scroll offset actually moves. Starts dirty so
+    // the first frame always draws.
+    dirty: Cell<bool>,
 }
 
 impl<'a> Help<'a> {
@@ -38,6 +41,7 @@ impl<'a> Help<'a> {
             key_w: 48, // key column width, in pixels (≈8 chars)
             offset: 0,
             page_size: Cell::new(usize::MAX),
+            dirty: Cell::new(true),
         }
     }
 
@@ -61,8 +65,15 @@ impl<'a> Component for Help<'a> {
         }
         let page = self.page_size.get().max(1);
         match msg {
-            Msg::Down if self.offset + page < n => self.offset += 1,
-            Msg::Up if self.offset > 0 => self.offset -= 1,
+            Msg::Down if self.offset + page < n => {
+                self.offset += 1;
+                self.dirty.set(true);
+            }
+            Msg::Up if self.offset > 0 => {
+                self.offset -= 1;
+                self.dirty.set(true);
+            }
+            // A clamped end scrolls nothing, so the frame is skipped.
             _ => {}
         }
     }
@@ -112,6 +123,18 @@ impl<'a> Component for Help<'a> {
             sb.set(n, rows, self.offset);
             sb.view(target, Area::new(area.x + area.w - 3, area.y, 3, area.h));
         }
+    }
+
+    fn dirty(&self) -> bool {
+        self.dirty.get()
+    }
+
+    fn mark_clean(&self) {
+        self.dirty.set(false);
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.set(true);
     }
 }
 
@@ -182,5 +205,26 @@ mod tests {
         help.view(&mut t, Area::new(0, 0, 120, 30));
         // Partial-redraw: view() clears its own area but draws no content.
         assert!(t.ops().iter().all(|op| matches!(op, Op::Clear { .. })));
+    }
+
+    // ── Dirty gate ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn help_dirty_gate() {
+        let items = &[("a", "A"), ("b", "B"), ("c", "C")];
+        let mut help = Help::new(items);
+        let mut t = RecordingTarget::new(120, 20); // 2 rows → scrollable
+        help.view(&mut t, Area::new(0, 0, 120, 20));
+        assert!(!help.dirty());
+
+        help.update(&Msg::Up); // already at the top
+        help.update(&Msg::Tick);
+        assert!(!help.dirty());
+
+        help.update(&Msg::Down);
+        assert!(help.dirty());
+        help.mark_clean();
+        help.update(&Msg::Down); // clamped at the last page
+        assert!(!help.dirty());
     }
 }

@@ -33,6 +33,9 @@ pub struct Radio<'a> {
     // Interior mutability: view(&self) records the visible-row count so the
     // following update(&mut self) can scroll without knowing render dimensions.
     page_size: Cell<usize>,
+    // Repaint gate: set when the cursor, the chosen option, the scroll offset or
+    // focus changes. Starts dirty so the first frame always draws.
+    dirty: Cell<bool>,
 }
 
 impl<'a> Radio<'a> {
@@ -44,6 +47,7 @@ impl<'a> Radio<'a> {
             offset: 0,
             focused: false,
             page_size: Cell::new(usize::MAX),
+            dirty: Cell::new(true),
         }
     }
 
@@ -70,6 +74,9 @@ impl<'a> Component for Radio<'a> {
             return;
         }
         let page = self.page_size.get().max(1);
+        // Choosing the option already chosen, or a clamped end, moves nothing -
+        // comparing the three indices afterwards keeps those frames clean.
+        let before = (self.cursor, self.offset, self.selected);
         match msg {
             Msg::Down if self.cursor + 1 < n => {
                 self.cursor += 1;
@@ -85,6 +92,9 @@ impl<'a> Component for Radio<'a> {
             }
             Msg::Select => self.selected = self.cursor,
             _ => {}
+        }
+        if (self.cursor, self.offset, self.selected) != before {
+            self.dirty.set(true);
         }
     }
 
@@ -145,10 +155,24 @@ impl<'a> Component for Radio<'a> {
 
     fn focus(&mut self) {
         self.focused = true;
+        self.dirty.set(true); // focus decides whether the cursor row bands
     }
 
     fn blur(&mut self) {
         self.focused = false;
+        self.dirty.set(true);
+    }
+
+    fn dirty(&self) -> bool {
+        self.dirty.get()
+    }
+
+    fn mark_clean(&self) {
+        self.dirty.set(false);
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.set(true);
     }
 }
 
@@ -279,5 +303,86 @@ mod tests {
         radio.view(&mut t, Area::new(0, 0, 120, 30));
         // Partial-redraw: view() clears its own area but draws no options.
         assert!(t.ops().iter().all(|op| matches!(op, Op::Clear { .. })));
+    }
+
+    // ── Dirty gate ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn radio_dirty_gate() {
+        let mut radio = Radio::new(OPTS);
+        assert!(radio.dirty());
+        radio.mark_clean();
+
+        radio.update(&Msg::Up); // cursor already at the top
+        radio.update(&Msg::Tick);
+        radio.update(&Msg::Select); // row 0 is already the chosen one
+        assert!(!radio.dirty());
+
+        radio.update(&Msg::Down);
+        assert!(radio.dirty());
+        radio.mark_clean();
+        radio.update(&Msg::Select); // chooses row 1 - a real change
+        assert!(radio.dirty());
+        radio.mark_clean();
+
+        radio.focus();
+        assert!(radio.dirty());
+        radio.mark_clean();
+        radio.blur();
+        assert!(radio.dirty());
+    }
+
+    #[test]
+    fn radio_clean_view_draws_nothing() {
+        let mut radio = Radio::new(OPTS);
+        let area = Area::new(0, 0, 120, 30);
+        let mut t0 = RecordingTarget::new(120, 30);
+        radio.view(&mut t0, area);
+        assert!(!t0.ops().is_empty());
+
+        radio.update(&Msg::Up); // clamped
+        let mut t1 = RecordingTarget::new(120, 30);
+        radio.view(&mut t1, area);
+        assert!(t1.ops().is_empty());
+    }
+
+    /// A group taller than its area reserves the indicator column and draws the
+    /// same track + thumb as List/Form.
+    #[test]
+    fn radio_overflow_draws_the_scroll_indicator() {
+        let radio = Radio::new(OPTS);
+        let mut t = RecordingTarget::new(120, 20); // 2 rows for 3 options
+        radio.view(&mut t, Area::new(0, 0, 120, 20));
+
+        let fills: Vec<_> = t
+            .ops()
+            .iter()
+            .filter_map(|op| match op {
+                Op::Fill { area, style } => Some((*area, *style)),
+                _ => None,
+            })
+            .collect();
+        assert!(fills.iter().any(|&(a, st)| st == Style::Muted && a.w == 1));
+        assert!(
+            fills
+                .iter()
+                .any(|&(a, st)| st == Style::Focus && a.w == 3 && a.x == 117)
+        );
+        // …and the option text stops short of that column.
+        for (x, _, s, _) in texts(&t) {
+            let end = x + 6 * s.chars().count() as u16;
+            assert!(
+                end <= 120 - V_SCROLL_RESERVE,
+                "{s:?} runs under the indicator"
+            );
+        }
+    }
+
+    #[test]
+    fn radio_no_indicator_when_everything_fits() {
+        let radio = Radio::new(OPTS);
+        let mut t = RecordingTarget::new(120, 30); // 3 rows for 3 options
+        radio.view(&mut t, Area::new(0, 0, 120, 30));
+        assert!(!t.ops().iter().any(|op| matches!(op, Op::Fill { .. })));
     }
 }

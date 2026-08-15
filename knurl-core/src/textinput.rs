@@ -1,3 +1,5 @@
+use core::cell::Cell;
+
 use crate::{Area, Component, FormField, Msg, RenderTarget, Style, draw_cursor_band};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -38,6 +40,9 @@ pub struct TextInput<'a, const N: usize> {
     window: u8,
     focused: bool,
     editing: bool,
+    // Repaint gate: set when the candidate token, the buffer, the done latch,
+    // focus or edit mode changes. Starts dirty so the first frame always draws.
+    dirty: Cell<bool>,
 }
 
 impl<'a, const N: usize> TextInput<'a, N> {
@@ -56,6 +61,7 @@ impl<'a, const N: usize> TextInput<'a, N> {
             window: 5,
             focused: false,
             editing: false,
+            dirty: Cell::new(true),
         }
     }
 
@@ -97,6 +103,7 @@ impl<'a, const N: usize> TextInput<'a, N> {
         self.len = 0;
         self.done = false;
         self.candidate = 0;
+        self.dirty.set(true);
     }
 
     // ── Private helpers ───────────────────────────────────────────────────
@@ -127,6 +134,9 @@ impl<'a, const N: usize> TextInput<'a, N> {
 impl<'a, const N: usize> Component for TextInput<'a, N> {
     fn update(&mut self, msg: &Msg) {
         let tc = self.token_count(); // always >= 2
+        // A Select on a full buffer, or a backspace on an empty one, is a no-op:
+        // comparing the three pieces of state afterwards catches both.
+        let before = (self.candidate, self.len, self.done);
         match msg {
             Msg::Down => self.candidate = (self.candidate + 1) % tc,
             Msg::Up => self.candidate = (self.candidate + tc - 1) % tc,
@@ -147,6 +157,9 @@ impl<'a, const N: usize> Component for TextInput<'a, N> {
                 }
             }
             _ => {}
+        }
+        if (self.candidate, self.len, self.done) != before {
+            self.dirty.set(true);
         }
     }
 
@@ -224,10 +237,24 @@ impl<'a, const N: usize> Component for TextInput<'a, N> {
 
     fn focus(&mut self) {
         self.focused = true;
+        self.dirty.set(true); // focus decides whether the text row bands
     }
 
     fn blur(&mut self) {
         self.focused = false;
+        self.dirty.set(true);
+    }
+
+    fn dirty(&self) -> bool {
+        self.dirty.get()
+    }
+
+    fn mark_clean(&self) {
+        self.dirty.set(false);
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.set(true);
     }
 }
 
@@ -252,6 +279,10 @@ impl<'a, const N: usize> FormField for TextInput<'a, N> {
     }
 
     fn set_editing(&mut self, editing: bool) {
+        if editing != self.editing {
+            // Edit mode grows the field by a row and shows the ribbon.
+            self.dirty.set(true);
+        }
         self.editing = editing;
         if !editing {
             // Leaving edit clears the transient "done" latch (and candidate) so a
@@ -449,5 +480,44 @@ mod tests {
         assert!(ti.editing_finished());
         ti.set_editing(false);
         assert!(!ti.editing_finished());
+    }
+
+    // ── Dirty gate ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn textinput_dirty_gate() {
+        let mut ti = TextInput::<2>::new("X").with_charset("AB");
+        assert!(ti.dirty());
+        ti.mark_clean();
+
+        ti.update(&Msg::Tick); // no token, no text, no change
+        assert!(!ti.dirty());
+
+        ti.update(&Msg::Down); // candidate moves - the ribbon changes
+        assert!(ti.dirty());
+        ti.mark_clean();
+
+        ti.update(&Msg::Select); // appends a character
+        assert!(ti.dirty());
+        ti.mark_clean();
+
+        ti.update(&Msg::Select); // buffer full (N = 2) after two appends
+        ti.mark_clean();
+        ti.update(&Msg::Select); // nothing left to append → no change
+        assert!(!ti.dirty());
+
+        ti.focus();
+        assert!(ti.dirty());
+        ti.mark_clean();
+        ti.blur();
+        assert!(ti.dirty());
+        ti.mark_clean();
+
+        // Entering edit grows the field by a row and shows the ribbon.
+        ti.set_editing(true);
+        assert!(ti.dirty());
+        ti.mark_clean();
+        ti.set_editing(true); // already editing → no change
+        assert!(!ti.dirty());
     }
 }
