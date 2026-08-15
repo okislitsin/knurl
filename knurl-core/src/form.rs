@@ -105,7 +105,7 @@ struct LayoutStamp {
 /// another. Build the array the way the state says, and pass it:
 ///
 /// ```
-/// # use knurl_core::{Counter, Form, FormField, Msg, Picker, Slider};
+/// # use knurl_core::{Form, FormField, Msg, Picker, Slider};
 /// # let mut mode = Picker::new("Mode", &["Off", "RGB"]);
 /// # let (mut r, mut g, mut b) = (Slider::new("R"), Slider::new("G"), Slider::new("B"));
 /// # let mut form = Form::new();
@@ -351,9 +351,9 @@ impl Form {
     /// rows that no longer exist - with the focus band on one of them, so
     /// `Select` would act on something the user cannot see.
     ///
-    /// So the form fingerprints its layout ([`LayoutStamp`]: the area, the
-    /// field count, the total height, the scroll offset and an order-sensitive
-    /// hash of the individual heights) and, whenever the fingerprint differs
+    /// So the form fingerprints its layout - the area, the field count, the
+    /// total height, the scroll offset and an order-sensitive hash of the
+    /// individual heights - and, whenever the fingerprint differs
     /// from the previous frame's, clears `area` and
     /// [`mark_dirty`](Component::mark_dirty)s every field before drawing - so
     /// they repaint through their own contract rather than behind its back.

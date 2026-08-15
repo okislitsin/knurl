@@ -672,8 +672,8 @@ pub trait Component {
     /// A **static** widget overrides it with `false` (a [`Label`] does): it
     /// handles no event, so a focus container that stops on it costs the user
     /// an encoder click that does nothing they can see. Read by
-    /// [`FocusZone::is_focusable`](crate::FocusZone::is_focusable), which is
-    /// how a [`FocusChain`](crate::FocusChain) steps over such widgets - and
+    /// [`FocusZone::is_focusable`], which is
+    /// how a [`FocusChain`] steps over such widgets - and
     /// the only thing that reads it, so it changes nothing for a widget used
     /// on its own.
     fn focusable(&self) -> bool {
