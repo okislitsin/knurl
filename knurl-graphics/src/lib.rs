@@ -102,20 +102,25 @@ where
 
 /// A small filled triangle for a tree expander: pointing **down** when
 /// `expanded`, **right** when collapsed, fitting an `s`-pixel square at `top`.
+///
+/// Vertices span `0..=s - 1`, so the figure is exactly `s` px wide and tall -
+/// spanning `0..=s` would put a pixel outside the square
+/// [`indicator_square`] handed out. Both callers drop `s == 0` before getting
+/// here; `s == 1` degenerates to the single pixel at `top`.
 fn expander_triangle(top: Point, s: u32, expanded: bool) -> Triangle {
-    let s = s as i32;
+    let last = s.saturating_sub(1) as i32;
     let (x, y) = (top.x, top.y);
     if expanded {
         Triangle::new(
             Point::new(x, y),
-            Point::new(x + s, y),
-            Point::new(x + s / 2, y + s),
+            Point::new(x + last, y),
+            Point::new(x + last / 2, y + last),
         )
     } else {
         Triangle::new(
             Point::new(x, y),
-            Point::new(x, y + s),
-            Point::new(x + s, y + s / 2),
+            Point::new(x, y + last),
+            Point::new(x + last, y + last / 2),
         )
     }
 }
@@ -1421,6 +1426,48 @@ mod tests {
             mono_on_pixels(Ind::Check, Style::Normal, area),
             mono_on_pixels(Ind::Check, Style::Muted, area)
         );
+    }
+
+    /// The expander triangle must fit the square `indicator_square` hands out -
+    /// vertices spanning `0..=s` put a pixel outside it, one column right and
+    /// one row below.
+    #[test]
+    fn mono_expander_fits_the_indicator_square() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        for expanded in [true, false] {
+            for (w, h) in [(12u16, 10u16), (6, 10), (10, 4), (3, 3), (2, 2), (1, 1)] {
+                let area = Area::new(1, 1, w, h);
+                let (top, s) = indicator_square(Rectangle::new(
+                    Point::new(1, 1),
+                    Size::new(u32::from(w), u32::from(h)),
+                ));
+                let square = Rectangle::new(top, Size::new(s, s));
+
+                let mut disp = MockDisplay::<BinaryColor>::new();
+                disp.set_allow_overdraw(true);
+                {
+                    let mut tgt = GraphicsTarget::new(&mut disp, FONT_6X10);
+                    // Style::Normal: the triangle is On, the cell wash Off.
+                    tgt.draw_expander(area, expanded, Style::Normal);
+                }
+                let mut lit = 0;
+                for y in 0..64 {
+                    for x in 0..64 {
+                        let p = Point::new(x, y);
+                        if disp.get_pixel(p) == Some(BinaryColor::On) {
+                            lit += 1;
+                            assert!(
+                                square.contains(p),
+                                "{w}x{h} expanded={expanded}: pixel {p:?} outside {square:?}"
+                            );
+                        }
+                    }
+                }
+                assert!(lit > 0, "{w}x{h} expanded={expanded}: nothing drawn");
+            }
+        }
     }
 
     /// A `Thick` border must stay within its `Area` - the 2px stroke is aligned
