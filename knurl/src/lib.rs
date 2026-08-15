@@ -8,8 +8,8 @@ pub use knurl_core::{
     Constraint, Counter, Dialog, Entry, FocusChain, FocusZone, Form, FormField, FormZone, HStack,
     Help, Label, LineGauge, LinesModel, List, ListModel, Marker, Msg, Nav, Outcome, Padded,
     Padding, Pager, Paginator, Picker, PickerItem, ProgressBar, Radio, RenderTarget, Router,
-    Scrollbar, Separator, Slider, Spacer, Spinner, SpinnerStyle, StatusBar, Style, Table,
-    TableModel, Tabs, TextInput, Title, Toggle, Tree, TreeItem, TreeModel, VStack,
+    Scrollbar, Separator, Slider, Spacer, Spinner, SpinnerStyle, StatusBar, Style, TabPages,
+    TabZone, Table, TableModel, Tabs, TextInput, Title, Toggle, Tree, TreeItem, TreeModel, VStack,
 };
 
 #[cfg(feature = "graphics")]
