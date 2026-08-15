@@ -213,6 +213,13 @@ impl FocusZone for ScrollZone<'_> {
 /// The screen's focus manager: an ordered set of [`FocusZone`]s, one of which
 /// holds the encoder.
 ///
+/// **This is the engine, not the way you build a screen.** A
+/// [`Screen`](crate::Screen) owns a chain and drives it - listing the zones,
+/// routing, invalidating - so a screen never calls `update`/`sync_focus`
+/// itself; it names its zones once and gets the rest. Read on for what the
+/// routing actually does (a screen's behaviour *is* these rules), or start at
+/// [`Screen`](crate::Screen) if you are writing one.
+///
 /// Modelled on [`Form`]: it owns no zones and carries no lifetime - the slice is
 /// passed to each call, so there is no heap and no self-referential struct. A
 /// `Form` is itself a zone through [`Form::zone`], which is how a screen holding

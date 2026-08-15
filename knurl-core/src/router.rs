@@ -63,12 +63,12 @@
 //! # }
 //! ```
 //!
-//! ## Where the router meets the focus chain
+//! ## What that does underneath
 //!
-//! Under a hand-rolled screen (or inside [`Screen::update`](crate::Screen::update),
-//! which is the same thing packaged) the join is the application's `match` on
-//! the chain's [`Outcome`](crate::Outcome), and that match is the same on every
-//! screen:
+//! [`Screen::update`](crate::Screen::update) is the `match` below, packaged.
+//! It is written out here once because the three outcomes are worth knowing
+//! whatever you build on - but an application should not be writing this by
+//! hand:
 //!
 //! - [`Activated`](crate::Outcome::Activated) - the user picked something.
 //!   Ask the widgets *what*: a pressed "< Back" is a [`pop`](Router::pop), a
