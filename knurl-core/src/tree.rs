@@ -1,7 +1,7 @@
 use core::cell::Cell;
 
 use crate::{
-    Area, Component, Msg, Outcome, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band,
+    Area, Component, Marker, Msg, Outcome, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band,
     draw_v_scroll,
 };
 
@@ -16,13 +16,9 @@ fn truncate_str(s: &str, max_chars: usize) -> &str {
         .unwrap_or(s)
 }
 
-/// The cursor glyph for a **leaf** row: the same arrowhead `Marker::ARROW` uses
-/// for a list cursor, drawn in the slot a parent's expander would occupy. It is
-/// text rather than a filled shape on purpose - `fill_rect` ignores the style on
-/// monochrome, so a drawn shape would vanish on a focus band, while a glyph
-/// inverts with the row. A pixel target draws a parent's expander as a solid
-/// triangle, so the two do not read alike.
-const LEAF_CURSOR: &str = ">";
+/// The slot a row's expander (or a leaf's cursor marker) occupies, in
+/// characters - the label starts after it plus a one-character gap.
+const SLOT_CHARS: u16 = 2;
 
 // ── TreeItem ────────────────────────────────────────────────────────────────
 
@@ -96,9 +92,10 @@ impl<const N: usize> TreeModel for [TreeItem<'_>; N] {
 /// target); each nesting level draws a thin indent guide. Nodes are `Muted`; the
 /// selected one follows the focus language (see [`draw_cursor_band`]) - a
 /// full-width band while the tree holds focus, plain `Normal` when it does not.
-/// A leaf under the cursor gets a marker in its (otherwise empty) expander slot,
-/// so an unfocused tree shows where the cursor is on any row, not only on
-/// parents.
+/// A leaf under the cursor gets a [`Marker`] in its (otherwise empty) expander
+/// slot, so an unfocused tree shows where the cursor is on any row, not only on
+/// parents - configurable, like the one on [`List`](crate::List),
+/// [`Table`](crate::Table) and [`Radio`](crate::Radio).
 /// Scrolls (never truncates) and shows the built-in scroll indicator on overflow.
 ///
 /// ## Capacity
@@ -119,6 +116,7 @@ pub struct Tree<'a, M: TreeModel + ?Sized = [TreeItem<'a>]> {
     expanded: u64,
     focused: bool,
     indent: u16,
+    marker: Marker,
     page_size: Cell<usize>,
     // Repaint gate: set when the selection, the scroll offset, the expansion
     // mask or focus changes. Starts dirty so the first frame always draws.
@@ -134,6 +132,7 @@ impl<'a, M: TreeModel + ?Sized> Tree<'a, M> {
             expanded: 0,
             focused: false,
             indent: 8, // per-depth indent, in pixels
+            marker: Marker::ARROW,
             // usize::MAX → "everything fits" until the first view() call.
             page_size: Cell::new(usize::MAX),
             dirty: Cell::new(true),
@@ -143,6 +142,20 @@ impl<'a, M: TreeModel + ?Sized> Tree<'a, M> {
     /// Sets the per-depth indentation, in pixels.
     pub fn with_indent(mut self, px: u16) -> Self {
         self.indent = px;
+        self
+    }
+
+    /// Sets the cursor marker drawn on a **leaf** under the cursor
+    /// ([`Marker::NONE`] to drop it).
+    ///
+    /// Only the marker's `selected` half is ever drawn, and only on a leaf: the
+    /// slot it goes in belongs to the expander, which a parent row uses for its
+    /// triangle. So this is the cursor glyph, not a column - the slot is
+    /// reserved on every row regardless, and nothing shifts as the cursor moves.
+    /// A marker wider than the two-character slot is truncated by the label
+    /// that follows it.
+    pub fn with_marker(mut self, marker: Marker) -> Self {
+        self.marker = marker;
         self
     }
 
@@ -394,13 +407,13 @@ impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
                     self.is_expanded(idx),
                     style,
                 );
-            } else if idx == self.selected {
-                target.draw_text(base_x, y, LEAF_CURSOR, style);
+            } else if idx == self.selected && !self.marker.selected.is_empty() {
+                target.draw_text(base_x, y, self.marker.selected, style);
             }
 
             // Label one expander-slot + gap (2 chars) past the node's base.
-            let label_x = base_x.saturating_add(2 * cw);
-            let used = d.saturating_mul(indent_px).saturating_add(2 * cw);
+            let label_x = base_x.saturating_add(SLOT_CHARS * cw);
+            let used = d.saturating_mul(indent_px).saturating_add(SLOT_CHARS * cw);
             let avail = content_w.saturating_sub(used);
             let max = (avail / cw) as usize;
             if max > 0 {
@@ -646,7 +659,7 @@ mod tests {
         assert!(bands(&t).is_empty());
         // The marker sits in the (otherwise empty) expander slot at x = 0.
         assert!(
-            tx.contains(&(0, 20, ">".into(), Style::Normal)),
+            tx.contains(&(0, 20, Marker::ARROW.selected.into(), Style::Normal)),
             "no leaf cursor: {tx:?}"
         );
         // Rows 0 and 1 are parents, so their slots hold expanders, not markers.
@@ -666,8 +679,32 @@ mod tests {
         let _ = tree.update(&Msg::Down); // About
         let mut t = RecordingTarget::new(160, 80);
         tree.view(&mut t, Area::new(0, 0, 160, 80));
-        assert!(texts(&t).contains(&(0, 20, ">".into(), Style::Focus)));
+        assert!(texts(&t).contains(&(0, 20, Marker::ARROW.selected.into(), Style::Focus)));
         assert_eq!(bands(&t), [(Area::new(0, 20, 160, 10), Style::Focus)]);
+    }
+
+    /// The glyph is a `Marker`, like every other cursor in the library - and
+    /// `Marker::NONE` gives it up without moving the labels, since the slot
+    /// belongs to the expander either way.
+    #[test]
+    fn the_leaf_cursor_is_a_marker() {
+        let pick = |marker: Marker| {
+            let mut tree = Tree::new(ITEMS).with_marker(marker);
+            let _ = tree.update(&Msg::Down);
+            let _ = tree.update(&Msg::Down); // About, a leaf
+            let mut t = RecordingTarget::new(160, 80);
+            tree.view(&mut t, Area::new(0, 0, 160, 80));
+            texts(&t)
+        };
+
+        let starred = pick(Marker::new("*", " "));
+        assert!(starred.contains(&(0, 20, "*".into(), Style::Normal)));
+        // …and the label has not moved: the slot was already reserved.
+        assert!(starred.contains(&(12, 20, "About".into(), Style::Normal)));
+
+        let none = pick(Marker::NONE);
+        assert!(!none.iter().any(|(x, y, ..)| *x == 0 && *y == 20));
+        assert!(none.contains(&(12, 20, "About".into(), Style::Normal)));
     }
 
     /// A parent keeps its expander - the marker is only for the rows that had
