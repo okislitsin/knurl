@@ -10,7 +10,7 @@ pub use knurl_core::{
     Padding, Pager, Paginator, Picker, PickerItem, ProgressBar, Radio, RenderTarget, Router,
     Screen, ScreenState, ScrollZone, Scrollbar, Separator, Slider, Spacer, Spinner, SpinnerStyle,
     StatusBar, Style, TabPages, TabZone, Table, TableModel, Tabs, TextInput, Title, Toggle, Tree,
-    TreeItem, TreeModel, VStack,
+    TreeItem, TreeModel, VStack, bitmap_runs,
 };
 
 #[cfg(feature = "graphics")]
