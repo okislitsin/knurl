@@ -14,7 +14,7 @@ publish = false
 [dependencies]
 # The facade, exactly as a device project depends on it - so a demo's screen
 # code and a firmware's screen code are written against the same paths.
-knurl = { path = "../knurl", version = "0.1.3", features = ["graphics"] }
+knurl = { path = "../knurl", version = "0.2.0", features = ["graphics"] }
 embedded-graphics = "0.8"
 # Pinned to the release that targets embedded-graphics 0.8 - the `DrawTarget`
 # types must unify with knurl-graphics, or `GraphicsTarget` won't accept the
