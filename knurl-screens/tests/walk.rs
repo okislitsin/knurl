@@ -14,8 +14,8 @@
 use knurl::{Area, Msg, Screen};
 use knurl_core::mock::{Op, RecordingTarget};
 use knurl_screens::{
-    App, AppEvent, MENU, Page, Panel, menu::MenuScreen, tab_forms::TabFormsScreen,
-    two_forms::TwoFormsScreen,
+    App, AppEvent, MENU, Page, Panel, canvas::CanvasScreen, menu::MenuScreen,
+    tab_forms::TabFormsScreen, two_forms::TwoFormsScreen,
 };
 
 /// What a screen gets on a 128x64 panel once the title row is taken.
@@ -117,6 +117,59 @@ fn the_menu_reports_the_page_under_its_cursor() {
     }
     assert_eq!(menu.update(&Msg::Down), None);
     assert_eq!(menu.update(&Msg::Select), Some(AppEvent::Quit));
+}
+
+// ── The screen that draws itself ─────────────────────────────────────────────
+
+/// The canvas screen's two ways of running a canvas, as behaviour: the gauge
+/// and the sparkline are built per frame and always paint; the icon is a field,
+/// so it paints once, goes quiet, and comes back only because `on_enter` marks
+/// it dirty - the trap every stored canvas has, since the screen's repaint
+/// cascade walks zones and a canvas is not one.
+#[test]
+fn the_canvas_screen_paints_live_drawings_and_a_gated_sprite() {
+    let count = |t: &RecordingTarget| {
+        let lines = t
+            .ops()
+            .iter()
+            .filter(|op| matches!(op, Op::Line { .. }))
+            .count();
+        let sprites = t
+            .ops()
+            .iter()
+            .filter(|op| matches!(op, Op::Bitmap { .. }))
+            .count();
+        (lines, sprites)
+    };
+
+    let mut screen = CanvasScreen::new();
+    screen.enter();
+
+    let mut first = RecordingTarget::new(128, 64);
+    screen.view(&mut first, BODY);
+    let (lines, sprites) = count(&first);
+    assert!(lines > 10, "the gauge and the sparkline: {lines} lines");
+    assert_eq!(sprites, 1, "the icon paints on the first frame");
+
+    let mut idle = RecordingTarget::new(128, 64);
+    screen.view(&mut idle, BODY);
+    let (lines, sprites) = count(&idle);
+    assert!(lines > 10, "a canvas built per frame always paints");
+    assert_eq!(sprites, 0, "…and one kept as a field has gone quiet");
+
+    // Leaving and coming back clears the screen, so the sprite has to be told.
+    screen.enter();
+    let mut again = RecordingTarget::new(128, 64);
+    screen.view(&mut again, BODY);
+    assert_eq!(count(&again).1, 1, "the icon never came back");
+}
+
+/// It animates past the focus chain, like every other live screen.
+#[test]
+fn the_canvas_screen_ticks() {
+    let mut screen = CanvasScreen::new();
+    screen.enter();
+    assert!(screen.tick(), "a live drawing is worth a frame");
 }
 
 // ── Two forms in a layout ────────────────────────────────────────────────────

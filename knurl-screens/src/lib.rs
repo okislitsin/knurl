@@ -35,6 +35,7 @@
 //! on one screen ([`ListFormScreen`](list_form::ListFormScreen)).
 
 pub mod app;
+pub mod canvas;
 pub mod chart;
 pub mod dialog;
 pub mod editors;
@@ -78,6 +79,7 @@ pub enum Page {
     Pager,
     Indicators,
     Position,
+    Canvas,
     TabForms,
     Status,
     Help,
@@ -102,6 +104,7 @@ pub const MENU: &[&str] = &[
     "Pager",
     "Indicators",
     "Position",
+    "Canvas",
     "Tabs + forms",
     "Status bar",
     "Help",
@@ -126,6 +129,7 @@ const PAGES: &[Page] = &[
     Page::Pager,
     Page::Indicators,
     Page::Position,
+    Page::Canvas,
     Page::TabForms,
     Page::Status,
     Page::Help,
@@ -157,6 +161,7 @@ impl Page {
             Page::Pager => "Pager",
             Page::Indicators => "Indicators",
             Page::Position => "Position",
+            Page::Canvas => "Canvas",
             Page::TabForms => "Tabs + forms",
             Page::Status => "Status bar",
             Page::Help => "Help",
