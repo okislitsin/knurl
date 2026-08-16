@@ -10,15 +10,47 @@ fn truncate(s: &str, max: usize) -> &str {
 /// Pixel gap between tab titles.
 const TAB_GAP: u16 = 8;
 
+/// Underline under the active tab while the strip has the encoder - thick
+/// enough to read as "here" from across a 128px panel.
+const ACTIVE_RULE_PX: u16 = 3;
+
+/// The hairline every other underline is drawn with.
+const HAIRLINE_PX: u16 = 1;
+
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 
 /// A single-row tab strip. Each ASCII title is **underlined** so the strip reads
-/// as tabs, not bare text: the active tab gets a thick `Accent` underline and
-/// `Accent` text; inactive tabs get a thin `Muted` underline and `Muted` text.
+/// as tabs, not bare text.
+///
+/// ## The four states
+///
+/// The strip has to say two things at once - which tab is active, and whether
+/// the encoder is on the strip or down in the page it opened - and on a
+/// monochrome panel it cannot say either with colour: `fill_rect` is
+/// style-blind there, so `Accent` and `Muted` are the same ink. Both are
+/// therefore carried by the **underline's weight**, which reads at 128px:
+///
+/// | | active tab | the others |
+/// |---|---|---|
+/// | **strip focused** | 3px `Accent` rule | 1px `Muted` hairline |
+/// | **strip not focused** | 1px `Muted` hairline | nothing |
+///
+/// So a focused strip is a row of underlined tabs with one heavy rule on it,
+/// and an unfocused strip goes quiet: it still says which tab you are on, and
+/// it plainly is not what the encoder is driving. The titles themselves keep
+/// their styles throughout (`Accent` for the active one, `Muted` for the rest),
+/// so on a colour panel the active tab stays recognisable while the rule dims.
+///
+/// Who sets the focus: a [`TabPages`] does, from the mode it is in - the strip
+/// is focused exactly when the encoder is not in the page (and not at all when
+/// the whole tab area has lost the focus). A bare `Tabs` on a
+/// [`FocusChain`](crate::FocusChain) gets it from
+/// [`focus`](Component::focus)/[`blur`](Component::blur) like any other widget.
 #[derive(Debug)]
 pub struct Tabs<'a> {
     titles: &'a [&'a str],
     selected: usize,
+    focused: bool,
 }
 
 impl<'a> Tabs<'a> {
@@ -26,7 +58,19 @@ impl<'a> Tabs<'a> {
         Self {
             titles,
             selected: 0,
+            focused: false,
         }
+    }
+
+    /// Whether the encoder is on the strip - see the type docs for what the
+    /// four states look like. Set by [`TabPages`] when the strip is inside one.
+    pub fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
+    }
+
+    /// Whether the strip currently holds the encoder.
+    pub fn focused(&self) -> bool {
+        self.focused
     }
 
     /// Sets the selected tab, clamped into `[0, len - 1]` (no-op with no tabs).
@@ -85,6 +129,18 @@ impl<'a> Component for Tabs<'a> {
         }
     }
 
+    // A bare strip on a chain gets its focus the ordinary way. Inside a
+    // `TabPages` these are not called: the container knows something the chain
+    // does not - that the focus can be on the strip *or* in the page below it -
+    // and sets the flag itself.
+    fn focus(&mut self) {
+        self.focused = true;
+    }
+
+    fn blur(&mut self) {
+        self.focused = false;
+    }
+
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
         if area.w == 0 || area.h == 0 || self.titles.is_empty() {
             return;
@@ -105,14 +161,19 @@ impl<'a> Component for Tabs<'a> {
             let style = if active { Style::Accent } else { Style::Muted };
             target.draw_text(x, area.y, t, style);
 
-            // Underline: 2px Accent for the active tab, 1px Muted otherwise.
-            let (uh, ustyle) = if active {
-                (2, Style::Accent)
-            } else {
-                (1, Style::Muted)
+            // The underline carries both "which tab" and "where the encoder
+            // is" - see the type docs for the table. Weight, not colour: on
+            // monochrome the two styles are the same ink.
+            let (uh, ustyle) = match (active, self.focused) {
+                (true, true) => (ACTIVE_RULE_PX, Style::Accent),
+                (true, false) => (HAIRLINE_PX, Style::Muted),
+                (false, true) => (HAIRLINE_PX, Style::Muted),
+                (false, false) => (0, Style::Muted),
             };
-            let uy = area.y + line_h.saturating_sub(uh);
-            target.fill_rect(Area::new(x, uy, tw, uh), ustyle);
+            if uh > 0 {
+                let uy = area.y + line_h.saturating_sub(uh);
+                target.fill_rect(Area::new(x, uy, tw, uh), ustyle);
+            }
 
             x = x.saturating_add(tw).saturating_add(TAB_GAP);
         }
@@ -245,12 +306,23 @@ impl TabPages {
 
     /// Routes one event through the tab area and reports its [`Outcome`]. See
     /// the type docs for the whole contract.
+    ///
+    /// Also keeps the strip's own focus flag in step with the mode: the encoder
+    /// is on the strip exactly when it is not in the page, and
+    /// [`Tabs`] draws itself accordingly. (Leaving the tab area altogether is
+    /// the chain's business - [`TabZone::leave`] handles it.)
     pub fn update(
         &mut self,
         msg: &Msg,
         tabs: &mut Tabs<'_>,
         content: &mut dyn FocusZone,
     ) -> Outcome {
+        let outcome = self.route(msg, tabs, content);
+        tabs.set_focused(!self.in_content);
+        outcome
+    }
+
+    fn route(&mut self, msg: &Msg, tabs: &mut Tabs<'_>, content: &mut dyn FocusZone) -> Outcome {
         if !self.in_content {
             return match msg {
                 Msg::Select => {
@@ -339,12 +411,17 @@ impl FocusZone for TabZone<'_, '_> {
             }
             _ => self.pages.focus_strip(self.content),
         }
+        self.tabs.set_focused(!self.pages.in_content);
     }
 
     fn leave(&mut self) {
         // Resetting the mode is the point: without it the tab area comes back
         // believing the focus is inside a page that nothing is pointing at.
         self.pages.focus_strip(self.content);
+        // …and the strip is not focused either now - the cursor left the whole
+        // area, which is precisely the state the strip used to render as if it
+        // still had the encoder.
+        self.tabs.set_focused(false);
     }
 
     /// An edit inside a page belongs to that page: a `Counter` at its bound
@@ -400,19 +477,72 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn tabs_active_and_inactive_styling_with_underline() {
-        let tabs = Tabs::new(T);
+    /// Renders a strip in one of its two focus states.
+    fn strip(focused: bool, selected: usize) -> RecordingTarget {
+        let mut tabs = Tabs::new(T).with_selected(selected);
+        tabs.set_focused(focused);
         let mut t = RecordingTarget::new(120, 12);
         tabs.view(&mut t, Area::new(0, 0, 120, 12));
+        t
+    }
+
+    #[test]
+    fn tabs_active_and_inactive_styling_with_underline() {
+        let t = strip(true, 0);
         let tx = texts(&t);
         // "One" active: Accent text at x=0; "Two" inactive: Muted at x = 18 + 8 = 26.
         assert!(tx.contains(&(0, 0, "One".into(), Style::Accent)));
         assert!(tx.contains(&(26, 0, "Two".into(), Style::Muted)));
-        // Active underline: 2px Accent under "One" (width 18, at y = 10 - 2 = 8).
-        assert!(fills(&t).contains(&(Area::new(0, 8, 18, 2), Style::Accent)));
-        // Inactive underline: 1px Muted under "Two" (at y = 9).
+        // Active rule: 3px Accent under "One" (width 18, at y = 10 - 3 = 7).
+        assert!(fills(&t).contains(&(Area::new(0, 7, 18, 3), Style::Accent)));
+        // Inactive underline: 1px Muted hairline under "Two" (at y = 9).
         assert!(fills(&t).contains(&(Area::new(26, 9, 18, 1), Style::Muted)));
+    }
+
+    /// The hole this closed: when the encoder went into the page, the strip
+    /// looked exactly as it did while it was being turned. All four states must
+    /// be told apart by **geometry** - on monochrome `fill_rect` ignores the
+    /// style, so `Accent` and `Muted` are the same ink and only the weight of
+    /// the rule survives.
+    #[test]
+    fn the_strip_shows_whether_the_encoder_is_on_it() {
+        let weights = |focused: bool| -> Vec<(u16, u16)> {
+            fills(&strip(focused, 0))
+                .iter()
+                .map(|(a, _)| (a.x, a.h))
+                .collect()
+        };
+        // Focused: a heavy rule under the active tab, a hairline under the other.
+        assert_eq!(weights(true), alloc::vec![(0, 3), (26, 1)]);
+        // Not focused: the strip goes quiet - one hairline, on the active tab
+        // only, so it still says where you are.
+        assert_eq!(weights(false), alloc::vec![(0, 1)]);
+
+        // …and the active tab stays the active tab in either state, which is
+        // what a colour panel reads it by.
+        for focused in [true, false] {
+            let tx = texts(&strip(focused, 1));
+            assert!(tx.contains(&(0, 0, "One".into(), Style::Muted)));
+            assert!(tx.contains(&(26, 0, "Two".into(), Style::Accent)));
+        }
+    }
+
+    /// 3px against 1px, not 2px against 1px: at 128px the old pair read the
+    /// same, which is why the active tab was hard to find on a mono panel.
+    #[test]
+    fn the_active_rule_is_three_times_the_hairline() {
+        assert_eq!(ACTIVE_RULE_PX, 3 * HAIRLINE_PX);
+    }
+
+    /// A bare strip on a chain gets its focus the ordinary way.
+    #[test]
+    fn a_strip_outside_a_container_follows_focus_and_blur() {
+        let mut tabs = Tabs::new(T);
+        assert!(!tabs.focused());
+        tabs.focus();
+        assert!(tabs.focused());
+        tabs.blur();
+        assert!(!tabs.focused());
     }
 
     #[test]
@@ -437,14 +567,11 @@ mod tests {
 
     #[test]
     fn tabs_active_underline_moves_with_selection() {
-        let tabs = Tabs::new(T).with_selected(1);
-        let mut t = RecordingTarget::new(120, 12);
-        tabs.view(&mut t, Area::new(0, 0, 120, 12));
-        // Now "Two" carries the 2px Accent underline.
+        // Now "Two" carries the heavy Accent rule.
         assert!(
-            fills(&t)
+            fills(&strip(true, 1))
                 .iter()
-                .any(|(a, st)| a.h == 2 && a.x == 26 && *st == Style::Accent)
+                .any(|(a, st)| a.h == ACTIVE_RULE_PX && a.x == 26 && *st == Style::Accent)
         );
     }
 
@@ -744,6 +871,48 @@ mod tests {
             assert_eq!(chain.focus_index(), 0);
         }
         assert!(pages.in_content(), "still inside the page");
+    }
+
+    /// The container is the only one who knows which of the three places the
+    /// encoder is in - on the strip, in the page, or gone from the tab area -
+    /// so it is the container that tells the strip how to draw itself.
+    #[test]
+    fn the_container_keeps_the_strips_focus_in_step_with_its_mode() {
+        let mut tabs = Tabs::new(T);
+        let mut content = Content::default();
+        let mut pages = TabPages::new();
+        let mut back = Button::new("< Back");
+        let mut chain = FocusChain::new();
+
+        {
+            let mut zone = pages.zone(&mut tabs, &mut content);
+            let mut zones: [&mut dyn FocusZone; 2] = [&mut zone, &mut back];
+            chain.sync_focus(&mut zones);
+        }
+        assert!(tabs.focused(), "the cursor arrived on the strip");
+
+        {
+            let mut zone = pages.zone(&mut tabs, &mut content);
+            let mut zones: [&mut dyn FocusZone; 2] = [&mut zone, &mut back];
+            let _ = chain.update(&Msg::Select, &mut zones); // into the page
+        }
+        assert!(!tabs.focused(), "the encoder is in the page now");
+
+        {
+            let mut zone = pages.zone(&mut tabs, &mut content);
+            let mut zones: [&mut dyn FocusZone; 2] = [&mut zone, &mut back];
+            let _ = chain.update(&Msg::Up, &mut zones); // back onto the strip
+        }
+        assert!(tabs.focused());
+
+        {
+            let mut zone = pages.zone(&mut tabs, &mut content);
+            let mut zones: [&mut dyn FocusZone; 2] = [&mut zone, &mut back];
+            let _ = chain.update(&Msg::Down, &mut zones); // switch to the last tab
+            let _ = chain.update(&Msg::Down, &mut zones); // …and off the strip
+            assert_eq!(chain.focus_index(), 1, "onto the button");
+        }
+        assert!(!tabs.focused(), "the whole tab area lost the cursor");
     }
 
     /// A strip with no titles is not a place the focus can stop.
