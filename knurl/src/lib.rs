@@ -4,13 +4,13 @@
 // `knurl` in their Cargo.toml — every widget plus the `Router`/`Nav`
 // navigation backbone.
 pub use knurl_core::{
-    Align, Area, BarChart, BarChartModel, BorderStyle, Bordered, Button, Checkbox, Component,
-    Constraint, Counter, Dialog, Entry, FocusChain, FocusZone, Form, FormField, FormZone, HStack,
-    Help, Label, LineGauge, LinesModel, List, ListModel, Marker, Msg, Nav, NoZone, Outcome, Padded,
-    Padding, Pager, Paginator, Picker, PickerItem, ProgressBar, Radio, RenderTarget, Router,
-    Screen, ScreenState, ScrollZone, Scrollbar, Separator, Slider, Spacer, Spinner, SpinnerStyle,
-    StatusBar, Style, TabPages, TabZone, Table, TableModel, Tabs, TextInput, Title, Toggle, Tree,
-    TreeItem, TreeModel, VStack, bitmap_runs,
+    Align, Area, BarChart, BarChartModel, BorderStyle, Bordered, Button, Canvas, Checkbox,
+    Component, Constraint, Counter, Dialog, Entry, FocusChain, FocusZone, Form, FormField,
+    FormZone, HStack, Help, Label, LineGauge, LinesModel, List, ListModel, Marker, Msg, Nav,
+    NoZone, Outcome, Padded, Padding, Pager, Paginator, Picker, PickerItem, ProgressBar, Radio,
+    RenderTarget, Router, Screen, ScreenState, ScrollZone, Scrollbar, Separator, Slider, Spacer,
+    Spinner, SpinnerStyle, StatusBar, Style, TabPages, TabZone, Table, TableModel, Tabs, TextInput,
+    Title, Toggle, Tree, TreeItem, TreeModel, VStack, bitmap_runs,
 };
 
 #[cfg(feature = "graphics")]
