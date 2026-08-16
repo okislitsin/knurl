@@ -293,15 +293,10 @@ mod tests {
                     continue; // nothing to contain
                 }
                 for op in t.ops() {
-                    let y = match op {
-                        Op::Text { y, .. } => *y,
-                        Op::Box { area: a, .. }
-                        | Op::Clear { area: a }
-                        | Op::Fill { area: a, .. }
-                        | Op::Band { area: a, .. }
-                        | Op::Bar { area: a, .. } => a.y,
-                    };
-                    assert!(y < area.y + area.h, "op {op:?} starts below {area:?}");
+                    assert!(
+                        op.top_y() < area.y + area.h,
+                        "op {op:?} starts below {area:?}"
+                    );
                 }
             }
         }

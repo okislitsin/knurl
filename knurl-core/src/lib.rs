@@ -398,6 +398,32 @@ impl BorderStyle {
 /// [`char_width`](RenderTarget::char_width) (monospace advance) and
 /// [`text_width`](RenderTarget::text_width). A widget asks the target how tall a
 /// line is / how wide a string is, then positions text by pixel coordinate.
+///
+/// ## Drawing primitives, and what they cost
+///
+/// Beside text there are four free-hand primitives -
+/// [`set_pixel`](RenderTarget::set_pixel), [`draw_line`](RenderTarget::draw_line),
+/// [`draw_rect`](RenderTarget::draw_rect) (outline) and
+/// [`draw_bitmap`](RenderTarget::draw_bitmap) (1-bit sprite) - plus the fills
+/// ([`fill_rect`](RenderTarget::fill_rect), [`fill_band`](RenderTarget::fill_band))
+/// and the semantic indicators. They take a [`Style`], never a colour: that is
+/// what keeps a hand-drawn widget portable across a monochrome OLED, a colour
+/// TFT and every theme, and testable against a recording target.
+///
+/// **Do not draw pixel by pixel in a loop.** Every call here goes through `dyn`
+/// dispatch, and on a real panel it may also become a bus transaction; a
+/// 40 × 20 shape painted with [`set_pixel`](RenderTarget::set_pixel) is 800 of
+/// both, where one [`draw_bitmap`](RenderTarget::draw_bitmap) is a handful of
+/// runs. Reach for a line, a fill or a blit and keep `set_pixel` for the
+/// occasional single dot.
+///
+/// Each primitive has a **default implementation** written over
+/// [`fill_rect`](RenderTarget::fill_rect), so a target that predates them (or a
+/// recording mock) keeps working and every target gets one shared Bresenham and
+/// one shared bitmap format. Pixel targets in `knurl-graphics` override them
+/// with the native embedded-graphics primitives - which is also where the
+/// [`Style`] survives on monochrome, since the default path bottoms out in
+/// `fill_rect` and that one deliberately ignores the style.
 pub trait RenderTarget {
     /// Display width in pixels.
     fn width(&self) -> u16;
@@ -449,6 +475,115 @@ pub trait RenderTarget {
     /// actively wrong: on monochrome that paints the row solid `On` whatever
     /// the style, hiding rows the theme does not invert.
     fn fill_band(&mut self, _area: Area, _style: Style) {}
+
+    // ── Free-hand primitives (see the trait docs on what they cost) ──────────
+
+    /// Lights the single pixel at `(x, y)` in the foreground of `style`.
+    ///
+    /// The default is a 1 × 1 [`fill_rect`](RenderTarget::fill_rect). This is
+    /// the most expensive pixel a widget can draw - see the trait docs before
+    /// reaching for it in a loop.
+    fn set_pixel(&mut self, x: u16, y: u16, style: Style) {
+        self.fill_rect(Area::new(x, y, 1, 1), style);
+    }
+
+    /// Draws a 1px line from `(x0, y0)` to `(x1, y1)` inclusive, in `style`.
+    ///
+    /// The default is the **one** Bresenham in the library: an axis-aligned line
+    /// becomes a single [`fill_rect`](RenderTarget::fill_rect) (the common case,
+    /// and the cheap one), and anything else is stepped with
+    /// [`set_pixel`](RenderTarget::set_pixel). A pixel target overrides it with
+    /// its native line, so no target has to carry a rasteriser of its own.
+    fn draw_line(&mut self, x0: u16, y0: u16, x1: u16, y1: u16, style: Style) {
+        if y0 == y1 {
+            let (a, b) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
+            self.fill_rect(Area::new(a, y0, (b - a).saturating_add(1), 1), style);
+            return;
+        }
+        if x0 == x1 {
+            let (a, b) = if y0 <= y1 { (y0, y1) } else { (y1, y0) };
+            self.fill_rect(Area::new(x0, a, 1, (b - a).saturating_add(1)), style);
+            return;
+        }
+        // Bresenham's integer line, the all-octant form: `err` carries twice the
+        // distance from the ideal line, and each step spends it on whichever
+        // axis is further behind.
+        let (mut x, mut y) = (i32::from(x0), i32::from(y0));
+        let (tx, ty) = (i32::from(x1), i32::from(y1));
+        let dx = (tx - x).abs();
+        let dy = -(ty - y).abs();
+        let sx = if x < tx { 1 } else { -1 };
+        let sy = if y < ty { 1 } else { -1 };
+        let mut err = dx + dy;
+        loop {
+            self.set_pixel(x as u16, y as u16, style);
+            if x == tx && y == ty {
+                return;
+            }
+            let e2 = 2 * err;
+            if e2 >= dy {
+                err += dy;
+                x += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y += sy;
+            }
+        }
+    }
+
+    /// Draws the 1px **outline** of `area` in `style`; the interior is left
+    /// alone. For a filled rectangle use [`fill_rect`](RenderTarget::fill_rect),
+    /// for chrome use [`draw_box`](RenderTarget::draw_box) (which knows the
+    /// [`BorderStyle`]s).
+    ///
+    /// The stroke is drawn **inside** `area`, like every other piece of chrome:
+    /// a 1 × 1 area is one pixel, and nothing ever lands on a neighbour.
+    fn draw_rect(&mut self, area: Area, style: Style) {
+        if area.w == 0 || area.h == 0 {
+            return;
+        }
+        self.fill_rect(Area::new(area.x, area.y, area.w, 1), style);
+        if area.h > 1 {
+            self.fill_rect(Area::new(area.x, area.y + area.h - 1, area.w, 1), style);
+        }
+        if area.h > 2 {
+            let (y, h) = (area.y + 1, area.h - 2);
+            self.fill_rect(Area::new(area.x, y, 1, h), style);
+            if area.w > 1 {
+                self.fill_rect(Area::new(area.x + area.w - 1, y, 1, h), style);
+            }
+        }
+    }
+
+    /// Blits a **1-bit sprite** into `area`, painting its set bits in `style`.
+    ///
+    /// The format is the one embedded-graphics' `ImageRaw<BinaryColor>` uses,
+    /// and it is worth stating in full because this is where everybody guesses
+    /// wrong:
+    ///
+    /// - **row-major**, top row first;
+    /// - within a row, **most significant bit first**: bit 7 of a byte is the
+    ///   leftmost of the eight pixels it carries;
+    /// - **every row starts on a byte boundary**. A row is `w.div_ceil(8)`
+    ///   bytes and the spare low bits of its last byte are ignored, so a 12px
+    ///   wide sprite is 2 bytes per row with 4 bits of padding;
+    /// - a **set bit paints** in the foreground of `style`; a clear bit paints
+    ///   nothing at all. The sprite is transparent, so an icon can be laid over
+    ///   a focus band and the band shows through;
+    /// - a slice **shorter** than `h` rows simply stops - the missing rows are
+    ///   not drawn (and never read).
+    ///
+    /// So an 8 × 2 arrow is `&[0b1111_0000, 0b0110_0000]`, and its two lit runs
+    /// are drawn as two [`fill_rect`](RenderTarget::fill_rect) calls, not twelve
+    /// pixels: the default walks each row's runs of set bits (see
+    /// [`bitmap_runs`], which is also what a pixel target reuses so that the
+    /// format is defined exactly once).
+    fn draw_bitmap(&mut self, area: Area, bits: &[u8], style: Style) {
+        bitmap_runs(area, bits, |x, y, w| {
+            self.fill_rect(Area::new(x, y, w, 1), style)
+        });
+    }
 
     /// Draws a horizontal progress/level bar filling `area` to the fraction
     /// `fill_permille / 1000`, in the given `style`.
@@ -521,6 +656,52 @@ pub trait RenderTarget {
         }
         let mut b = [0u8; 4];
         self.draw_text(area.x, area.y, frame.encode_utf8(&mut b), style);
+    }
+}
+
+// ── 1-bit bitmap format ──────────────────────────────────────────────────────
+
+/// Walks the horizontal runs of set bits in a 1-bit sprite, calling
+/// `run(x, y, w)` for each - the single definition of the
+/// [`draw_bitmap`](RenderTarget::draw_bitmap) format.
+///
+/// The format is documented on [`draw_bitmap`](RenderTarget::draw_bitmap):
+/// row-major, MSB first, each row padded to a whole number of bytes, set bits
+/// painted and clear bits transparent. Every target that overrides
+/// `draw_bitmap` with a native blit calls this rather than re-deriving the bit
+/// order - that arithmetic is exactly what gets mirrored, off-by-one'd or
+/// byte-swapped when it is written twice.
+///
+/// Runs are emitted in reading order (top row first, left to right) and never
+/// extend past `area`.
+pub fn bitmap_runs(area: Area, bits: &[u8], mut run: impl FnMut(u16, u16, u16)) {
+    if area.w == 0 || area.h == 0 {
+        return;
+    }
+    let w = area.w as usize;
+    let stride = w.div_ceil(8);
+    for row in 0..area.h as usize {
+        let base = row * stride;
+        if base >= bits.len() {
+            return; // a short slice stops here: the rest of the sprite is absent
+        }
+        let set = |col: usize| -> bool {
+            let i = base + col / 8;
+            i < bits.len() && (bits[i] >> (7 - col % 8)) & 1 == 1
+        };
+        let y = area.y.saturating_add(row as u16);
+        let mut col = 0;
+        while col < w {
+            if !set(col) {
+                col += 1;
+                continue;
+            }
+            let start = col;
+            while col < w && set(col) {
+                col += 1;
+            }
+            run(area.x.saturating_add(start as u16), y, (col - start) as u16);
+        }
     }
 }
 
@@ -835,6 +1016,57 @@ pub mod mock {
             fill_permille: u16,
             style: Style,
         },
+        /// A single pixel ([`set_pixel`](RenderTarget::set_pixel)).
+        Pixel {
+            x: u16,
+            y: u16,
+            style: Style,
+        },
+        /// A line ([`draw_line`](RenderTarget::draw_line)), recorded by its two
+        /// endpoints rather than rasterised: a test asserts on the line the
+        /// widget asked for, not on the pixels a particular target chose.
+        Line {
+            x0: u16,
+            y0: u16,
+            x1: u16,
+            y1: u16,
+            style: Style,
+        },
+        /// A rectangle **outline** ([`draw_rect`](RenderTarget::draw_rect)),
+        /// kept apart from [`Op::Fill`] because that is the whole difference
+        /// between the two calls.
+        Rect {
+            area: Area,
+            style: Style,
+        },
+        /// A 1-bit sprite ([`draw_bitmap`](RenderTarget::draw_bitmap)), with the
+        /// bits verbatim - the bit order is a contract, so a test gets to see
+        /// exactly what was handed over.
+        Bitmap {
+            area: Area,
+            bits: Vec<u8>,
+            style: Style,
+        },
+    }
+
+    impl Op {
+        /// The topmost pixel row this op touches - the question a partial-redraw
+        /// test asks ("did anything land in the title's row?"). Kept here rather
+        /// than as a `match` in each test, so a new [`Op`] variant does not
+        /// silently mean "touches nothing".
+        pub fn top_y(&self) -> u16 {
+            match self {
+                Op::Text { y, .. } | Op::Pixel { y, .. } => *y,
+                Op::Line { y0, y1, .. } => *y0.min(y1),
+                Op::Box { area, .. }
+                | Op::Clear { area }
+                | Op::Fill { area, .. }
+                | Op::Band { area, .. }
+                | Op::Bar { area, .. }
+                | Op::Rect { area, .. }
+                | Op::Bitmap { area, .. } => area.y,
+            }
+        }
     }
 
     /// Records every draw call and exposes fixed font metrics.
@@ -934,6 +1166,36 @@ pub mod mock {
             self.ops.push(Op::Bar {
                 area,
                 fill_permille,
+                style,
+            });
+        }
+
+        // The free-hand primitives are recorded as asked for, not as rasterised:
+        // a widget's intent ("a line from here to there") is what a test wants
+        // to pin, and the shared defaults are checked on their own against a
+        // pixel grid instead.
+        fn set_pixel(&mut self, x: u16, y: u16, style: Style) {
+            self.ops.push(Op::Pixel { x, y, style });
+        }
+
+        fn draw_line(&mut self, x0: u16, y0: u16, x1: u16, y1: u16, style: Style) {
+            self.ops.push(Op::Line {
+                x0,
+                y0,
+                x1,
+                y1,
+                style,
+            });
+        }
+
+        fn draw_rect(&mut self, area: Area, style: Style) {
+            self.ops.push(Op::Rect { area, style });
+        }
+
+        fn draw_bitmap(&mut self, area: Area, bits: &[u8], style: Style) {
+            self.ops.push(Op::Bitmap {
+                area,
+                bits: bits.to_vec(),
                 style,
             });
         }
@@ -1205,14 +1467,7 @@ mod tests {
         title.view(&mut t1, title_area);
         spinner.view(&mut t1, spin_area);
         assert!(!t1.ops().is_empty());
-        let touched_title_row = t1.ops().iter().any(|op| match op {
-            Op::Text { y, .. } => *y < 12,
-            Op::Clear { area }
-            | Op::Fill { area, .. }
-            | Op::Band { area, .. }
-            | Op::Box { area, .. }
-            | Op::Bar { area, .. } => area.y < 12,
-        });
+        let touched_title_row = t1.ops().iter().any(|op| op.top_y() < 12);
         assert!(!touched_title_row);
     }
 
@@ -1302,6 +1557,330 @@ mod tests {
                 },
                 Op::Clear {
                     area: Area::new(1, 1, 4, 1)
+                },
+            ]
+        );
+    }
+
+    // ── Free-hand primitives: the shared defaults, on a pixel grid ───────────
+
+    /// A target that implements **only** what [`RenderTarget`] demands, so every
+    /// free-hand primitive runs through its default implementation, and paints
+    /// [`fill_rect`](RenderTarget::fill_rect) into a grid a test can read back.
+    /// It also counts the fills, which is how "a line is one call, not forty"
+    /// gets checked.
+    struct Grid {
+        w: u16,
+        h: u16,
+        px: alloc::vec::Vec<Option<Style>>,
+        fills: usize,
+    }
+
+    impl Grid {
+        fn new(w: u16, h: u16) -> Self {
+            Self {
+                w,
+                h,
+                px: alloc::vec![None; (w as usize) * (h as usize)],
+                fills: 0,
+            }
+        }
+
+        fn at(&self, x: u16, y: u16) -> Option<Style> {
+            self.px[y as usize * self.w as usize + x as usize]
+        }
+
+        fn lit(&self) -> usize {
+            self.px.iter().filter(|p| p.is_some()).count()
+        }
+
+        /// The lit pixels as `(x, y)`, in reading order.
+        fn points(&self) -> alloc::vec::Vec<(u16, u16)> {
+            let mut v = alloc::vec::Vec::new();
+            for y in 0..self.h {
+                for x in 0..self.w {
+                    if self.at(x, y).is_some() {
+                        v.push((x, y));
+                    }
+                }
+            }
+            v
+        }
+    }
+
+    impl RenderTarget for Grid {
+        fn width(&self) -> u16 {
+            self.w
+        }
+        fn height(&self) -> u16 {
+            self.h
+        }
+        fn is_graphical(&self) -> bool {
+            true
+        }
+        fn line_height(&self) -> u16 {
+            10
+        }
+        fn char_width(&self) -> u16 {
+            6
+        }
+        fn draw_text(&mut self, _x: u16, _y: u16, _t: &str, _s: Style) {}
+        fn draw_box(&mut self, _a: Area, _b: BorderStyle) {}
+        fn clear(&mut self, _a: Area) {}
+        fn fill_rect(&mut self, area: Area, style: Style) {
+            self.fills += 1;
+            for y in area.y..area.y.saturating_add(area.h).min(self.h) {
+                for x in area.x..area.x.saturating_add(area.w).min(self.w) {
+                    self.px[y as usize * self.w as usize + x as usize] = Some(style);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn set_pixel_default_lights_exactly_one_pixel_in_its_style() {
+        let mut g = Grid::new(8, 4);
+        g.set_pixel(3, 2, Style::Danger);
+        assert_eq!(g.points(), alloc::vec![(3, 2)]);
+        assert_eq!(g.at(3, 2), Some(Style::Danger));
+    }
+
+    /// An axis-aligned line is the common case and must cost one fill, not one
+    /// per pixel - both ends inclusive, in either direction.
+    #[test]
+    fn axis_aligned_lines_are_one_fill_each_way() {
+        let mut g = Grid::new(10, 6);
+        g.draw_line(2, 1, 6, 1, Style::Accent);
+        assert_eq!(g.fills, 1, "a horizontal line is one fill_rect");
+        assert_eq!(
+            g.points(),
+            alloc::vec![(2, 1), (3, 1), (4, 1), (5, 1), (6, 1)],
+            "both endpoints are drawn"
+        );
+
+        let mut back = Grid::new(10, 6);
+        back.draw_line(6, 1, 2, 1, Style::Accent);
+        assert_eq!(back.points(), g.points(), "direction must not matter");
+
+        let mut v = Grid::new(10, 6);
+        v.draw_line(4, 0, 4, 3, Style::Accent);
+        assert_eq!(v.fills, 1, "a vertical line is one fill_rect");
+        assert_eq!(v.points(), alloc::vec![(4, 0), (4, 1), (4, 2), (4, 3)]);
+    }
+
+    /// A single-pixel line ("from here to here") is still a pixel.
+    #[test]
+    fn a_line_of_no_length_is_one_pixel() {
+        let mut g = Grid::new(4, 4);
+        g.draw_line(1, 1, 1, 1, Style::Normal);
+        assert_eq!(g.points(), alloc::vec![(1, 1)]);
+    }
+
+    /// The shared Bresenham: a 45-degree line is the exact diagonal, a shallow
+    /// one steps once per column, and neither leaves its bounding box.
+    #[test]
+    fn bresenham_steps_the_minor_axis_and_stays_in_its_box() {
+        let mut d = Grid::new(8, 8);
+        d.draw_line(0, 0, 5, 5, Style::Normal);
+        assert_eq!(
+            d.points(),
+            alloc::vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5)]
+        );
+
+        // Shallow: 9 columns, 3 rows - one pixel per column, endpoints included,
+        // monotone in both axes.
+        let mut s = Grid::new(12, 6);
+        s.draw_line(1, 1, 9, 4, Style::Muted);
+        let pts = s.points();
+        assert_eq!(pts.len(), 9, "one pixel per column: {pts:?}");
+        assert!(pts.contains(&(1, 1)) && pts.contains(&(9, 4)));
+        for (x, y) in &pts {
+            assert!((1..=9).contains(x) && (1..=4).contains(y), "({x},{y}) out");
+        }
+
+        // Drawn backwards it is the same line: same endpoints, same one pixel
+        // per column. (Not necessarily the same pixels - where the ideal line
+        // passes exactly between two rows, Bresenham breaks the tie towards the
+        // direction it is walking. Cosmetic, and cheaper than a symmetric
+        // rasteriser nobody would see the benefit of.)
+        let mut r = Grid::new(12, 6);
+        r.draw_line(9, 4, 1, 1, Style::Muted);
+        let back = r.points();
+        assert_eq!(back.len(), pts.len(), "the same line, drawn backwards");
+        assert!(back.contains(&(1, 1)) && back.contains(&(9, 4)));
+    }
+
+    /// `draw_rect` is an outline: the border is lit, the interior is not, and
+    /// the stroke stays inside the area (a 1px box is one pixel).
+    #[test]
+    fn draw_rect_outlines_inside_the_area() {
+        let mut g = Grid::new(10, 8);
+        let area = Area::new(1, 1, 6, 5);
+        g.draw_rect(area, Style::Accent);
+        for y in 0..8u16 {
+            for x in 0..10u16 {
+                let on_edge = area.contains(x, y)
+                    && (x == area.x || y == area.y || x == area.x + 5 || y == area.y + 4);
+                assert_eq!(
+                    g.at(x, y).is_some(),
+                    on_edge,
+                    "({x},{y}) should{} be lit",
+                    if on_edge { "" } else { " not" }
+                );
+            }
+        }
+    }
+
+    /// Degenerate rectangles: a hairline in either axis is a line, a 1x1 is a
+    /// pixel, and a zero side draws nothing.
+    #[test]
+    fn draw_rect_degenerates_to_a_line_and_a_pixel() {
+        let mut one = Grid::new(6, 6);
+        one.draw_rect(Area::new(2, 2, 1, 1), Style::Normal);
+        assert_eq!(one.points(), alloc::vec![(2, 2)]);
+
+        let mut row = Grid::new(6, 6);
+        row.draw_rect(Area::new(1, 3, 4, 1), Style::Normal);
+        assert_eq!(row.points(), alloc::vec![(1, 3), (2, 3), (3, 3), (4, 3)]);
+
+        let mut col = Grid::new(6, 6);
+        col.draw_rect(Area::new(3, 1, 1, 3), Style::Normal);
+        assert_eq!(col.points(), alloc::vec![(3, 1), (3, 2), (3, 3)]);
+
+        let mut none = Grid::new(6, 6);
+        none.draw_rect(Area::new(1, 1, 0, 4), Style::Normal);
+        none.draw_rect(Area::new(1, 1, 4, 0), Style::Normal);
+        assert_eq!(none.lit(), 0);
+    }
+
+    // ── The bitmap format (the place everybody guesses wrong) ────────────────
+
+    /// Row-major, most significant bit first, one byte per 8 pixels: an 8x2
+    /// arrowhead lands exactly where its bits say.
+    #[test]
+    fn bitmap_is_row_major_and_msb_first() {
+        let mut g = Grid::new(10, 4);
+        // Row 0: pixels 0..4 lit. Row 1: pixels 1 and 2.
+        g.draw_bitmap(
+            Area::new(1, 1, 8, 2),
+            &[0b1111_0000, 0b0110_0000],
+            Style::Accent,
+        );
+        assert_eq!(
+            g.points(),
+            alloc::vec![(1, 1), (2, 1), (3, 1), (4, 1), (2, 2), (3, 2)]
+        );
+        assert_eq!(
+            g.at(1, 1),
+            Some(Style::Accent),
+            "the sprite carries a style"
+        );
+        assert_eq!(
+            g.fills, 2,
+            "one fill per run of set bits, not one per pixel"
+        );
+    }
+
+    /// Every row starts on a byte boundary: a 12px sprite is 2 bytes per row,
+    /// and the 4 spare bits of the second byte are padding, not pixels of the
+    /// next row.
+    #[test]
+    fn bitmap_rows_are_byte_aligned() {
+        let mut g = Grid::new(16, 4);
+        //        col 0..7      col 8..11 + 4 bits of padding
+        let bits = [
+            0b1000_0001,
+            0b1000_1111, // row 0: cols 0, 7, 8  (the padding bits are ignored)
+            0b0000_0000,
+            0b0100_0000, // row 1: col 9
+        ];
+        g.draw_bitmap(Area::new(0, 0, 12, 2), &bits, Style::Normal);
+        assert_eq!(g.points(), alloc::vec![(0, 0), (7, 0), (8, 0), (9, 1)]);
+    }
+
+    /// A clear bit paints nothing: the sprite is transparent, so an icon over a
+    /// focus band lets the band through.
+    #[test]
+    fn bitmap_clear_bits_are_transparent() {
+        let mut g = Grid::new(8, 2);
+        g.fill_rect(Area::new(0, 0, 8, 2), Style::Focus); // the band
+        g.draw_bitmap(
+            Area::new(0, 0, 8, 2),
+            &[0b1010_1010, 0b0101_0101],
+            Style::Normal,
+        );
+        for x in 0..8u16 {
+            let (top, bottom) = (g.at(x, 0), g.at(x, 1));
+            let expect_top = if x % 2 == 0 {
+                Style::Normal
+            } else {
+                Style::Focus
+            };
+            assert_eq!(top, Some(expect_top), "top ({x})");
+            let expect_bottom = if x % 2 == 1 {
+                Style::Normal
+            } else {
+                Style::Focus
+            };
+            assert_eq!(bottom, Some(expect_bottom), "bottom ({x})");
+        }
+    }
+
+    /// A slice shorter than the area stops at the last whole row it has - and
+    /// never reads past its end.
+    #[test]
+    fn bitmap_short_slice_draws_what_it_has() {
+        let mut g = Grid::new(8, 4);
+        g.draw_bitmap(Area::new(0, 0, 8, 4), &[0b1111_1111], Style::Normal);
+        assert_eq!(g.lit(), 8, "only the row the slice carries");
+        assert!((0..8).all(|x| g.at(x, 0).is_some()));
+
+        let mut empty = Grid::new(8, 4);
+        empty.draw_bitmap(Area::new(0, 0, 8, 4), &[], Style::Normal);
+        assert_eq!(empty.lit(), 0);
+    }
+
+    /// A zero-sided area is nothing to blit into.
+    #[test]
+    fn bitmap_zero_area_draws_nothing() {
+        let mut g = Grid::new(8, 4);
+        g.draw_bitmap(Area::new(0, 0, 0, 4), &[0xFF], Style::Normal);
+        g.draw_bitmap(Area::new(0, 0, 8, 0), &[0xFF], Style::Normal);
+        assert_eq!(g.lit(), 0);
+    }
+
+    /// The recording target records the free-hand calls as they were made - the
+    /// intent, not a rasterisation of it.
+    #[test]
+    fn free_hand_primitives_are_recorded_verbatim() {
+        let mut t = RecordingTarget::new(64, 32);
+        t.set_pixel(1, 2, Style::Danger);
+        t.draw_line(0, 0, 9, 4, Style::Accent);
+        t.draw_rect(Area::new(2, 2, 8, 6), Style::Muted);
+        t.draw_bitmap(Area::new(4, 4, 8, 1), &[0b1100_0000], Style::Focus);
+        assert_eq!(
+            t.ops(),
+            &[
+                Op::Pixel {
+                    x: 1,
+                    y: 2,
+                    style: Style::Danger
+                },
+                Op::Line {
+                    x0: 0,
+                    y0: 0,
+                    x1: 9,
+                    y1: 4,
+                    style: Style::Accent
+                },
+                Op::Rect {
+                    area: Area::new(2, 2, 8, 6),
+                    style: Style::Muted
+                },
+                Op::Bitmap {
+                    area: Area::new(4, 4, 8, 1),
+                    bits: alloc::vec![0b1100_0000],
+                    style: Style::Focus
                 },
             ]
         );
