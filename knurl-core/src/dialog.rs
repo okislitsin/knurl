@@ -18,6 +18,11 @@ fn truncate(s: &str, max: usize) -> &str {
 /// A button row too wide for the box ends in a dimmed `>`: the buttons past it
 /// are still selectable, just not on screen (see
 /// [`selected_button`](Dialog::selected_button)).
+///
+/// A dialog **without buttons** is a notice rather than a question: it has
+/// nothing to confirm, so `Select` comes straight back
+/// [`Ignored`](Outcome::Ignored) and the screen that raised it is free to spend
+/// the press on dismissing it.
 #[derive(Debug)]
 pub struct Dialog<'a> {
     title: &'a str,
@@ -106,7 +111,12 @@ impl<'a> Component for Dialog<'a> {
             // Confirm changes no on-screen pixels of the dialog itself - so no
             // dirty - but it is precisely the moment the app acts on: it reads
             // `take_confirmed()` / `selected_button()` and closes the modal.
-            Msg::Select => {
+            //
+            // A dialog with no buttons has nothing to confirm: it is a notice,
+            // not a question, and `selected_button()` would answer `""`. The
+            // press is reported unspent so whoever put the notice on screen can
+            // use it to dismiss the thing.
+            Msg::Select if n > 0 => {
                 self.confirmed = true;
                 Outcome::Activated
             }
@@ -452,5 +462,19 @@ mod tests {
         // case that proves Outcome is not the dirty flag under another name.
         assert_eq!(d.update(&Msg::Select), Outcome::Activated);
         assert_eq!(d.selected_button(), "No");
+    }
+
+    /// A dialog with no buttons is a notice: there is nothing to confirm, so
+    /// the press must come back unspent instead of reporting a choice nobody
+    /// made (`selected_button()` would answer `""`).
+    #[test]
+    fn a_dialog_with_no_buttons_confirms_nothing() {
+        let mut d = Dialog::new("Saved", "Settings written", &[]);
+        assert_eq!(d.update(&Msg::Select), Outcome::Ignored);
+        assert!(!d.take_confirmed(), "nothing was confirmed");
+        assert_eq!(d.selected_button(), "");
+        // …and it is still a dialog: rotation has nowhere to go either.
+        assert_eq!(d.update(&Msg::Down), Outcome::Ignored);
+        assert_eq!(d.update(&Msg::Up), Outcome::Ignored);
     }
 }
