@@ -1,6 +1,7 @@
 #![no_std]
 
 use embedded_graphics::{
+    draw_target::{Clipped, DrawTargetExt},
     mono_font::{MonoFont, MonoTextStyleBuilder},
     pixelcolor::{BinaryColor, Rgb565},
     prelude::*,
@@ -371,7 +372,59 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> GraphicsTarget<'a, D> {
             .draw(self.display);
     }
 
-    /// Access to the underlying `DrawTarget` for pixel-level widget drawing.
+    /// The `(foreground, background)` this target renders `style` in - what a
+    /// hand-drawn escape-hatch shape needs so it stays themed instead of
+    /// hardcoding a colour. See [`clipped`](GraphicsTarget::clipped).
+    pub fn colors(&self, style: Style) -> (BinaryColor, BinaryColor) {
+        self.mono_pair(style)
+    }
+
+    /// The raw embedded-graphics `DrawTarget`, **clipped to `area`** - the
+    /// escape hatch, for the drawing the portable primitives cannot express:
+    /// arcs, sectors, images, a font of your own.
+    ///
+    /// It lives here and not in `knurl-core` on purpose. Reaching through it
+    /// ties the widget to embedded-graphics and to a colour type, and that is a
+    /// trade the core must not be able to make: a `RenderTarget` is what a
+    /// character LCD, a recording mock or a future backend can also be.
+    ///
+    /// The clip is the safety rail. `area` is translated to display coordinates
+    /// and everything drawn through the returned target is masked to it, so an
+    /// arc that overshoots by two pixels cannot land on the widget next door -
+    /// the same contract every `Component::draw` already has, only enforced
+    /// rather than promised. Pair it with [`colors`](GraphicsTarget::colors) to
+    /// keep the ink on the theme.
+    ///
+    /// ```
+    /// use embedded_graphics::{
+    ///     mock_display::MockDisplay, mono_font::ascii::FONT_6X10, pixelcolor::BinaryColor,
+    ///     prelude::*, primitives::{Circle, PrimitiveStyle},
+    /// };
+    /// use knurl_graphics::GraphicsTarget;
+    /// use knurl_core::{Area, Style};
+    ///
+    /// let mut display = MockDisplay::<BinaryColor>::new();
+    /// let mut target = GraphicsTarget::new(&mut display, FONT_6X10);
+    ///
+    /// let area = Area::new(0, 0, 8, 8);
+    /// let (ink, _) = target.colors(Style::Accent);
+    /// let mut raw = target.clipped(area);
+    /// // Twice the width of the area - the clip keeps it off the neighbours.
+    /// Circle::new(Point::new(0, 0), 16)
+    ///     .into_styled(PrimitiveStyle::with_stroke(ink, 1))
+    ///     .draw(&mut raw)
+    ///     .unwrap();
+    ///
+    /// assert!(display.affected_area().size.width <= 8);
+    /// ```
+    pub fn clipped(&mut self, area: Area) -> Clipped<'_, D> {
+        let rect = self.px_rect(area);
+        self.display.clipped(&rect)
+    }
+
+    /// The underlying `DrawTarget`, **unclipped**. Prefer
+    /// [`clipped`](GraphicsTarget::clipped): this one will happily draw over the
+    /// whole panel, and the caller carries the bounds check.
     pub fn display_mut(&mut self) -> &mut D {
         self.display
     }
@@ -1100,7 +1153,23 @@ where
         )
     }
 
-    /// Access to the underlying `DrawTarget` for pixel-level drawing.
+    /// The `(foreground, background)` colours this target renders `style` in -
+    /// so drawing through [`clipped`](ColorGraphicsTarget::clipped) can stay on
+    /// the theme instead of naming an `Rgb565`.
+    pub fn colors(&self, style: Style) -> (C, C) {
+        self.theme.resolve(style)
+    }
+
+    /// The raw embedded-graphics `DrawTarget`, **clipped to `area`** - the
+    /// escape hatch for arcs, images and fonts of your own. The colour twin of
+    /// [`GraphicsTarget::clipped`]; the same reasoning, and the same clip.
+    pub fn clipped(&mut self, area: Area) -> Clipped<'_, D> {
+        let rect = self.px_rect(area);
+        self.display.clipped(&rect)
+    }
+
+    /// The underlying `DrawTarget`, **unclipped**. Prefer
+    /// [`clipped`](ColorGraphicsTarget::clipped).
     pub fn display_mut(&mut self) -> &mut D {
         self.display
     }
@@ -1937,6 +2006,55 @@ mod tests {
             disp.get_pixel(Point::new(2, 10)),
             None,
             "clear bits are clear"
+        );
+    }
+
+    // ── Escape hatch ────────────────────────────────────────────────────────
+
+    /// The clip is the point of the escape hatch: a shape that overshoots its
+    /// area is masked, not painted onto the widget next door. Checked on both
+    /// targets, and against the area's **offset** too - the hatch works in the
+    /// widget's own pixel coordinates, translated by the display origin.
+    #[test]
+    fn the_escape_hatch_is_clipped_to_the_area() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        let area = Area::new(4, 4, 6, 6);
+        let long = Line::new(Point::new(0, 6), Point::new(40, 6));
+
+        let mut mono = MockDisplay::<BinaryColor>::new();
+        {
+            let mut tgt = GraphicsTarget::new(&mut mono, FONT_6X10);
+            let (ink, _) = tgt.colors(Style::Normal);
+            let mut raw = tgt.clipped(area);
+            long.into_styled(PrimitiveStyle::with_stroke(ink, 1))
+                .draw(&mut raw)
+                .unwrap();
+        }
+        assert_eq!(
+            mono.affected_area(),
+            Rectangle::new(Point::new(4, 6), Size::new(6, 1)),
+            "the line was not clipped to the area"
+        );
+
+        let mut color = MockDisplay::<Rgb565>::new();
+        {
+            let mut tgt = ColorGraphicsTarget::new(&mut color, FONT_6X10);
+            let (ink, _) = tgt.colors(Style::Accent);
+            let mut raw = tgt.clipped(area);
+            long.into_styled(PrimitiveStyle::with_stroke(ink, 1))
+                .draw(&mut raw)
+                .unwrap();
+        }
+        assert_eq!(
+            color.affected_area(),
+            Rectangle::new(Point::new(4, 6), Size::new(6, 1))
+        );
+        assert_eq!(
+            color.get_pixel(Point::new(4, 6)),
+            Some(ColorTheme::<Rgb565>::default().foreground(Style::Accent)),
+            "the hatch must be able to stay on the theme"
         );
     }
 
