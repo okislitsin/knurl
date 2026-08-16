@@ -3,6 +3,7 @@
 use core::cell::Cell;
 
 mod basics;
+mod canvas;
 mod chart;
 mod dialog;
 mod focus;
@@ -23,6 +24,7 @@ mod textinput;
 mod tree;
 
 pub use basics::{Separator, Spacer, Title};
+pub use canvas::Canvas;
 pub use chart::{BarChart, BarChartModel};
 pub use dialog::Dialog;
 pub use focus::{Entry, FocusChain, FocusZone, FormZone, NoZone, ScrollZone};
