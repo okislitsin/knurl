@@ -177,15 +177,62 @@ impl Padding {
 
 // ── Input messages ───────────────────────────────────────────────────────────
 
+/// One input event, as the host delivers it.
+///
+/// ## The baseline is an encoder
+///
+/// knurl's hardware is a **rotary encoder with one push button**: the entire
+/// input vocabulary a widget may *rely* on is [`Up`](Msg::Up) /
+/// [`Down`](Msg::Down) (rotate) and [`Select`](Msg::Select) (press), plus
+/// [`Tick`](Msg::Tick) from the frame loop. There is no Escape and no Back key;
+/// "Back" is a **selectable item** the user rotates to and presses, which is
+/// why every screen in the demo carries a `< Back` button rather than trusting
+/// a key. A widget that can only be driven by something else is a widget that
+/// is dead on the target hardware.
+///
+/// ## …and the rest is an extension point, deliberately
+///
+/// [`Left`](Msg::Left), [`Right`](Msg::Right), [`Back`](Msg::Back) and
+/// [`Char`](Msg::Char) are **not dead code, and are not a leftover from a
+/// keyboard era** - do not propose removing them. They are here so a component
+/// can *optionally* answer to more buttons when the host has them, without the
+/// core growing a second event type: `Tabs` takes `Left`/`Right` beside the
+/// rotation, `Paginator` takes only those two, and a text field can take a
+/// `Char` from a host that can produce one. `knurl-sim` already ships both
+/// hosts - an encoder keymap (`left`/`right`/`back: None`) and a keyboard one
+/// (arrows, Escape) - so the two-tier model is exercised, not hypothetical.
+///
+/// The consequence to keep in mind while writing a widget: **on an encoder host
+/// those arms are unreachable.** Anything a widget can *only* do on
+/// `Left`/`Right`/`Back` is unavailable on the real device, so every such
+/// action needs a rotation-and-press path too. Handling the extra buttons is a
+/// convenience for richer hosts, never the design.
+///
+/// How a component should *declare* which extra inputs it understands is an
+/// open question (a `Paginator` is focusable but a dead stop on an encoder, so
+/// "is this focusable" arguably depends on the host). It is deliberately left
+/// open until a host with buttons actually exists; see `improve.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Msg {
+    /// Encoder rotated one detent anticlockwise (or the up key).
     Up,
+    /// Encoder rotated one detent clockwise (or the down key).
     Down,
+    /// Extension point: a host with arrows. Unreachable on an encoder.
     Left,
+    /// Extension point: a host with arrows. Unreachable on an encoder.
     Right,
+    /// Encoder button pressed. The only press there is.
     Select,
+    /// Extension point: a host with a back/escape key. Unreachable on an
+    /// encoder, where "Back" is an item on the screen.
     Back,
+    /// Extension point: a host that can type. Unreachable on an encoder, where
+    /// text is picked a character at a time (see [`TextInput`]).
     Char(char),
+    /// The frame loop's heartbeat: animation, follow-the-tail, timeouts. Sent
+    /// to whatever animates, not routed through the focus chain (see
+    /// [`Screen::tick`]).
     Tick,
 }
 
