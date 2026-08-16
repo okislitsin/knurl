@@ -9,12 +9,12 @@
 use knurl::{Area, LinesModel, Msg, RenderTarget, Router, Screen};
 
 use crate::{
-    AppEvent, Page, Panel, chart::ChartScreen, dialog::DialogScreen, editors::EditorsScreen,
-    form::FormScreen, help::HelpScreen, indicators::IndicatorsScreen, list::ListScreen,
-    list_form::ListFormScreen, menu::MenuScreen, pager::PagerScreen, position::PositionScreen,
-    radio::RadioScreen, status::StatusScreen, tab_forms::TabFormsScreen, table::TableScreen,
-    text::TextScreen, textinput::TextInputScreen, toggles::TogglesScreen, tree::TreeScreen,
-    two_forms::TwoFormsScreen,
+    AppEvent, Page, Panel, canvas::CanvasScreen, chart::ChartScreen, dialog::DialogScreen,
+    editors::EditorsScreen, form::FormScreen, help::HelpScreen, indicators::IndicatorsScreen,
+    list::ListScreen, list_form::ListFormScreen, menu::MenuScreen, pager::PagerScreen,
+    position::PositionScreen, radio::RadioScreen, status::StatusScreen, tab_forms::TabFormsScreen,
+    table::TableScreen, text::TextScreen, textinput::TextInputScreen, toggles::TogglesScreen,
+    tree::TreeScreen, two_forms::TwoFormsScreen,
 };
 
 /// How deep the demo ever nests: the menu plus one page.
@@ -39,6 +39,7 @@ pub struct App<'a, M: LinesModel + ?Sized> {
     pager: PagerScreen<'a, M>,
     indicators: IndicatorsScreen,
     position: PositionScreen,
+    canvas: CanvasScreen,
     tab_forms: TabFormsScreen,
     status: StatusScreen,
     help: HelpScreen,
@@ -66,6 +67,7 @@ impl<'a, M: LinesModel + ?Sized> App<'a, M> {
             pager: PagerScreen::new(lines),
             indicators: IndicatorsScreen::new(),
             position: PositionScreen::new(),
+            canvas: CanvasScreen::new(),
             tab_forms: TabFormsScreen::new(panel),
             status: StatusScreen::new(),
             help: HelpScreen::new(panel),
@@ -102,6 +104,7 @@ impl<'a, M: LinesModel + ?Sized> App<'a, M> {
             Page::Pager => &mut self.pager,
             Page::Indicators => &mut self.indicators,
             Page::Position => &mut self.position,
+            Page::Canvas => &mut self.canvas,
             Page::TabForms => &mut self.tab_forms,
             Page::Status => &mut self.status,
             Page::Help => &mut self.help,
