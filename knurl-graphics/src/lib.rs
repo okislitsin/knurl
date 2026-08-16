@@ -5,13 +5,13 @@ use embedded_graphics::{
     pixelcolor::{BinaryColor, Rgb565},
     prelude::*,
     primitives::{
-        Circle, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, RoundedRectangle,
+        Circle, Line, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, RoundedRectangle,
         StrokeAlignment, Triangle,
     },
     text::{Baseline, Text},
 };
 
-use knurl_core::{Area, BorderStyle, RenderTarget, Style};
+use knurl_core::{Area, BorderStyle, RenderTarget, Style, bitmap_runs};
 
 pub use knurl_core as core;
 
@@ -136,6 +136,71 @@ fn expander_triangle(top: Point, s: u32, expanded: bool) -> Triangle {
             Point::new(x + last, y + last / 2),
         )
     }
+}
+
+// ── Free-hand primitives (shared by both targets) ────────────────────────────
+//
+// The core's defaults reach every one of these through `fill_rect`, which is
+// correct but pays a rectangle per pixel on a diagonal - and on monochrome
+// loses the style, since `fill_rect` there is deliberately style-blind. Both
+// targets override them with the native embedded-graphics primitives and
+// resolve the colour from the style, so a hand-drawn widget inverts with its
+// row like everything else. The bodies are shared here rather than written
+// twice, colour type and all.
+
+/// One pixel at `p`.
+fn px_one<D, C>(display: &mut D, p: Point, color: C)
+where
+    D: DrawTarget<Color = C>,
+    C: PixelColor,
+{
+    // `::core` spelled out: this crate re-exports `knurl_core as core`.
+    let _ = display.draw_iter(::core::iter::once(Pixel(p, color)));
+}
+
+/// A 1px line from `a` to `b`, both ends included.
+fn stroke_line<D, C>(display: &mut D, a: Point, b: Point, color: C)
+where
+    D: DrawTarget<Color = C>,
+    C: PixelColor,
+{
+    let _ = Line::new(a, b)
+        .into_styled(PrimitiveStyle::with_stroke(color, 1))
+        .draw(display);
+}
+
+/// A 1px rectangle outline, stroked **inside** `rect` - the default alignment
+/// would centre the stroke on the boundary and spill onto the neighbour.
+fn stroke_rect<D, C>(display: &mut D, rect: Rectangle, color: C)
+where
+    D: DrawTarget<Color = C>,
+    C: PixelColor,
+{
+    let style = PrimitiveStyleBuilder::new()
+        .stroke_color(color)
+        .stroke_width(1)
+        .stroke_alignment(StrokeAlignment::Inside)
+        .build();
+    let _ = rect.into_styled(style).draw(display);
+}
+
+/// A 1-bit sprite, one rectangle per run of set bits. The bit order is not
+/// re-derived here: [`bitmap_runs`] is the format, and this is one of its two
+/// callers by design.
+fn blit<D, C>(display: &mut D, origin: Point, area: Area, bits: &[u8], color: C)
+where
+    D: DrawTarget<Color = C>,
+    C: PixelColor,
+{
+    let fill = PrimitiveStyle::with_fill(color);
+    bitmap_runs(area, bits, |x, y, w| {
+        let _ = Rectangle::new(
+            origin + Point::new(i32::from(x), i32::from(y)),
+            Size::new(u32::from(w), 1),
+        )
+        .into_styled(fill)
+        .draw(display);
+    });
 }
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
@@ -464,6 +529,41 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
     fn fill_band(&mut self, area: Area, style: Style) {
         let (_, bg) = self.mono_pair(style);
         self.fill_bg(area, bg);
+    }
+
+    /// One pixel in the `style`'s **foreground** - `Off` where the theme
+    /// inverts the style, so a dot drawn on a focus band is visible.
+    ///
+    /// Unlike [`fill_rect`](RenderTarget::fill_rect), which is style-blind on
+    /// purpose (the scroll indicator depends on it), the free-hand primitives
+    /// honour the style: a hand-drawn widget has nothing else to say "ink" with.
+    fn set_pixel(&mut self, x: u16, y: u16, style: Style) {
+        let (fg, _) = self.mono_pair(style);
+        let p = self.px_point(x, y);
+        px_one(self.display, p, fg);
+    }
+
+    /// A native 1px line in the `style`'s foreground (no per-pixel dispatch).
+    fn draw_line(&mut self, x0: u16, y0: u16, x1: u16, y1: u16, style: Style) {
+        let (fg, _) = self.mono_pair(style);
+        let (a, b) = (self.px_point(x0, y0), self.px_point(x1, y1));
+        stroke_line(self.display, a, b, fg);
+    }
+
+    /// A 1px outline inside `area`, in the `style`'s foreground.
+    fn draw_rect(&mut self, area: Area, style: Style) {
+        let (fg, _) = self.mono_pair(style);
+        let rect = self.px_rect(area);
+        stroke_rect(self.display, rect, fg);
+    }
+
+    /// A 1-bit sprite in the `style`'s foreground, its clear bits left
+    /// transparent - so an icon over a focus band inverts with the row instead
+    /// of punching a hole in it.
+    fn draw_bitmap(&mut self, area: Area, bits: &[u8], style: Style) {
+        let (fg, _) = self.mono_pair(style);
+        let origin = self.origin();
+        blit(self.display, origin, area, bits, fg);
     }
 
     /// A smooth pixel bar: a rounded outline track with a solid rounded fill of
@@ -1128,6 +1228,35 @@ where
         let _ = rect.into_styled(s).draw(self.display);
     }
 
+    /// One pixel in the `style`'s foreground colour.
+    fn set_pixel(&mut self, x: u16, y: u16, style: Style) {
+        let color = self.theme.foreground(style);
+        let p = self.px_point(x, y);
+        px_one(self.display, p, color);
+    }
+
+    /// A native 1px line in the `style`'s foreground colour.
+    fn draw_line(&mut self, x0: u16, y0: u16, x1: u16, y1: u16, style: Style) {
+        let color = self.theme.foreground(style);
+        let (a, b) = (self.px_point(x0, y0), self.px_point(x1, y1));
+        stroke_line(self.display, a, b, color);
+    }
+
+    /// A 1px outline inside `area`, in the `style`'s foreground colour.
+    fn draw_rect(&mut self, area: Area, style: Style) {
+        let color = self.theme.foreground(style);
+        let rect = self.px_rect(area);
+        stroke_rect(self.display, rect, color);
+    }
+
+    /// A 1-bit sprite in the `style`'s foreground colour; clear bits leave
+    /// whatever was underneath.
+    fn draw_bitmap(&mut self, area: Area, bits: &[u8], style: Style) {
+        let color = self.theme.foreground(style);
+        let origin = self.origin();
+        blit(self.display, origin, area, bits, color);
+    }
+
     /// A smooth Charm-style bar: a dark-grey rounded track with a rounded fill in
     /// the `style`'s colour (e.g. purple for `Accent`, lilac for `Focus`), filled
     /// to `fill_permille/1000`.
@@ -1650,6 +1779,164 @@ mod tests {
             disp.affected_area(),
             Rectangle::new(Point::new(2, 2), Size::new(10, 8)),
             "the stroke escapes the area"
+        );
+    }
+
+    // ── Free-hand primitives, natively ──────────────────────────────────────
+
+    /// The native line is the line that was asked for: both endpoints, one
+    /// pixel per column on a shallow slope, nothing outside the bounding box.
+    #[test]
+    fn mono_line_is_drawn_end_to_end() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        let mut disp = MockDisplay::<BinaryColor>::new();
+        {
+            let mut tgt = GraphicsTarget::new(&mut disp, FONT_6X10);
+            tgt.draw_line(2, 2, 10, 5, Style::Normal);
+        }
+        assert_eq!(disp.get_pixel(Point::new(2, 2)), Some(BinaryColor::On));
+        assert_eq!(disp.get_pixel(Point::new(10, 5)), Some(BinaryColor::On));
+        assert_eq!(
+            disp.affected_area(),
+            Rectangle::new(Point::new(2, 2), Size::new(9, 4)),
+            "the line escapes its own bounding box"
+        );
+    }
+
+    /// The free-hand primitives honour the style where `fill_rect` cannot: on a
+    /// focus band the ink has to go `Off`, or a hand-drawn widget disappears the
+    /// moment the cursor lands on it.
+    #[test]
+    fn mono_free_hand_ink_inverts_with_the_style() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        for style in [Style::Normal, Style::Focus] {
+            let inverted = Theme::new().resolve(style);
+            let mut disp = MockDisplay::<BinaryColor>::new();
+            disp.set_allow_overdraw(true);
+            {
+                let mut tgt = GraphicsTarget::new(&mut disp, FONT_6X10);
+                tgt.set_pixel(1, 1, style);
+                tgt.draw_line(3, 1, 6, 4, style);
+                tgt.draw_rect(Area::new(8, 1, 5, 4), style);
+                tgt.draw_bitmap(Area::new(1, 6, 8, 1), &[0b1111_0000], style);
+            }
+            let want = if inverted {
+                BinaryColor::Off
+            } else {
+                BinaryColor::On
+            };
+            for p in [
+                Point::new(1, 1), // the pixel
+                Point::new(3, 1), // the line's start
+                Point::new(8, 1), // the outline's corner
+                Point::new(1, 6), // the sprite's first lit bit
+            ] {
+                assert_eq!(disp.get_pixel(p), Some(want), "{style:?} at {p:?}");
+            }
+            // …and `fill_rect` still is not style-aware, which is the contract
+            // the scroll indicator rests on.
+            assert_eq!(disp.get_pixel(Point::new(9, 2)), None, "outline is hollow");
+        }
+    }
+
+    /// The outline stays inside its area, like every other piece of chrome.
+    #[test]
+    fn mono_rect_outline_stays_inside_and_stays_hollow() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        let mut disp = MockDisplay::<BinaryColor>::new();
+        {
+            let mut tgt = GraphicsTarget::new(&mut disp, FONT_6X10);
+            tgt.draw_rect(Area::new(2, 3, 8, 6), Style::Normal);
+        }
+        assert_eq!(
+            disp.affected_area(),
+            Rectangle::new(Point::new(2, 3), Size::new(8, 6))
+        );
+        assert_eq!(disp.get_pixel(Point::new(2, 3)), Some(BinaryColor::On));
+        assert_eq!(disp.get_pixel(Point::new(9, 8)), Some(BinaryColor::On));
+        assert_eq!(
+            disp.get_pixel(Point::new(5, 5)),
+            None,
+            "the interior is left"
+        );
+    }
+
+    /// The native blit reads the same bits as the shared default: row-major,
+    /// MSB first, rows padded to whole bytes, clear bits transparent.
+    #[test]
+    fn mono_bitmap_matches_the_documented_format() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        let mut disp = MockDisplay::<BinaryColor>::new();
+        {
+            let mut tgt = GraphicsTarget::new(&mut disp, FONT_6X10);
+            // 12px wide → 2 bytes per row; row 0 lights columns 0, 7 and 8.
+            tgt.draw_bitmap(
+                Area::new(1, 1, 12, 2),
+                &[0b1000_0001, 0b1000_1111, 0b0000_0000, 0b0100_0000],
+                Style::Normal,
+            );
+        }
+        for p in [
+            Point::new(1, 1),
+            Point::new(8, 1),
+            Point::new(9, 1),
+            Point::new(10, 2),
+        ] {
+            assert_eq!(disp.get_pixel(p), Some(BinaryColor::On), "{p:?} unlit");
+        }
+        // The 4 padding bits of row 0's second byte are not pixels of row 1.
+        assert_eq!(disp.get_pixel(Point::new(1, 2)), None);
+        assert_eq!(
+            disp.affected_area(),
+            Rectangle::new(Point::new(1, 1), Size::new(10, 2)),
+            "the sprite paints outside its own columns"
+        );
+    }
+
+    /// The colour target draws the same shapes in the theme's colours.
+    #[test]
+    fn color_free_hand_primitives_use_the_theme() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        let theme = ColorTheme::<Rgb565>::default();
+        let mut disp = MockDisplay::<Rgb565>::new();
+        disp.set_allow_overdraw(true);
+        {
+            let mut tgt = ColorGraphicsTarget::new(&mut disp, FONT_6X10);
+            tgt.set_pixel(0, 0, Style::Danger);
+            tgt.draw_line(2, 0, 8, 3, Style::Accent);
+            tgt.draw_rect(Area::new(0, 5, 6, 4), Style::Muted);
+            tgt.draw_bitmap(Area::new(0, 10, 8, 1), &[0b1100_0000], Style::Accent);
+        }
+        assert_eq!(
+            disp.get_pixel(Point::new(0, 0)),
+            Some(theme.foreground(Style::Danger))
+        );
+        assert_eq!(
+            disp.get_pixel(Point::new(2, 0)),
+            Some(theme.foreground(Style::Accent))
+        );
+        assert_eq!(
+            disp.get_pixel(Point::new(0, 5)),
+            Some(theme.foreground(Style::Muted))
+        );
+        assert_eq!(
+            disp.get_pixel(Point::new(1, 10)),
+            Some(theme.foreground(Style::Accent))
+        );
+        assert_eq!(
+            disp.get_pixel(Point::new(2, 10)),
+            None,
+            "clear bits are clear"
         );
     }
 
