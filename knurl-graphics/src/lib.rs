@@ -12,9 +12,22 @@ use embedded_graphics::{
     text::{Baseline, Text},
 };
 
-use knurl_core::{Area, BorderStyle, RenderTarget, Style, bitmap_runs};
+use knurl_core::{Area, BorderStyle, DirtyRect, RenderTarget, Style, bitmap_runs};
 
 pub use knurl_core as core;
+
+/// The pixel box a line from `(x0, y0)` to `(x1, y1)` occupies - both ends
+/// inclusive, so it is one pixel past the larger coordinate on each axis. What
+/// the [dirty region](RenderTarget::take_dirty_rect) needs from a primitive
+/// whose extent is a pair of points rather than an [`Area`].
+fn line_box(x0: u16, y0: u16, x1: u16, y1: u16) -> Area {
+    Area::new(
+        x0.min(x1),
+        y0.min(y1),
+        x0.abs_diff(x1) + 1,
+        y0.abs_diff(y1) + 1,
+    )
+}
 
 /// A gentle corner radius (in pixels) for a `RoundedRectangle` of `size`, used by
 /// rounded borders and the rounded fill bars. Scales with the smaller side and is
@@ -313,14 +326,20 @@ pub struct GraphicsTarget<'a, D> {
     display: &'a mut D,
     font: MonoFont<'static>,
     theme: Theme,
+    dirty: DirtyRect,
 }
 
 impl<'a, D: DrawTarget<Color = BinaryColor>> GraphicsTarget<'a, D> {
     pub fn new(display: &'a mut D, font: MonoFont<'static>) -> Self {
+        let size = display.bounding_box().size;
         Self {
             display,
             font,
             theme: Theme::new(),
+            dirty: DirtyRect::new(
+                size.width.min(u16::MAX as u32) as u16,
+                size.height.min(u16::MAX as u32) as u16,
+            ),
         }
     }
 
@@ -348,6 +367,25 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> GraphicsTarget<'a, D> {
             self.px_point(area.x, area.y),
             Size::new(area.w as u32, area.h as u32),
         )
+    }
+
+    /// Records `area` as touched - every drawing method's first line, and the
+    /// only bookkeeping behind
+    /// [`take_dirty_rect`](RenderTarget::take_dirty_rect). The [`DirtyRect`]
+    /// clamps to the panel, so a method may hand it whatever it was asked to
+    /// draw.
+    fn mark(&mut self, area: Area) {
+        self.dirty.add(area);
+    }
+
+    /// Records the pixel box `text` occupies at `(x, y)`: the monospace advance
+    /// times its characters, one line tall - which is exactly the cell run
+    /// `MonoTextStyle` paints, background included. Text is the one primitive
+    /// whose extent is not in its arguments, and taking "the rest of the row"
+    /// instead would inflate every region a label appears in.
+    fn mark_text(&mut self, x: u16, y: u16, text: &str) {
+        let (w, h) = (self.text_width(text), self.line_height());
+        self.mark(Area::new(x, y, w, h));
     }
 
     /// The `(foreground, background)` pair `style` renders in: `(Off, On)` when
@@ -395,13 +433,22 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> GraphicsTarget<'a, D> {
     /// rather than promised. Pair it with [`colors`](GraphicsTarget::colors) to
     /// keep the ink on the theme.
     ///
+    /// The clip is also what keeps the escape hatch honest about **partial
+    /// redraw**: a raw `DrawTarget` draws behind this target's back, so `area`
+    /// is added to the [dirty region](RenderTarget::take_dirty_rect) the moment
+    /// it is handed out - before a single pixel is drawn, and whether or not
+    /// any is. That over-reports (a hatch that drew nothing still costs its
+    /// area) and cannot under-report, which is the only direction a partial
+    /// redraw may be wrong in: an under-reported region leaves stale pixels on
+    /// the panel with nothing to point at.
+    ///
     /// ```
     /// use embedded_graphics::{
     ///     mock_display::MockDisplay, mono_font::ascii::FONT_6X10, pixelcolor::BinaryColor,
     ///     prelude::*, primitives::{Circle, PrimitiveStyle},
     /// };
     /// use knurl_graphics::GraphicsTarget;
-    /// use knurl_core::{Area, Style};
+    /// use knurl_core::{Area, RenderTarget, Style};
     ///
     /// let mut display = MockDisplay::<BinaryColor>::new();
     /// let mut target = GraphicsTarget::new(&mut display, FONT_6X10);
@@ -415,9 +462,14 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> GraphicsTarget<'a, D> {
     ///     .draw(&mut raw)
     ///     .unwrap();
     ///
+    /// // ...and the region says so, so the application pushes those pixels.
+    /// assert_eq!(target.take_dirty_rect(), Some(area));
     /// assert!(display.affected_area().size.width <= 8);
     /// ```
     pub fn clipped(&mut self, area: Area) -> Clipped<'_, D> {
+        // Conservative by necessity: what goes through the returned target is
+        // invisible here, so its area is dirty as soon as it is asked for.
+        self.mark(area);
         let rect = self.px_rect(area);
         self.display.clipped(&rect)
     }
@@ -425,7 +477,17 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> GraphicsTarget<'a, D> {
     /// The underlying `DrawTarget`, **unclipped**. Prefer
     /// [`clipped`](GraphicsTarget::clipped): this one will happily draw over the
     /// whole panel, and the caller carries the bounds check.
+    ///
+    /// It also **marks the whole panel dirty**, which is the same statement in
+    /// the other currency: an unclipped target can paint any pixel, so the only
+    /// region that is certainly enough is all of them. That costs a frame the
+    /// bus time it costs today - and the way to get a tight region back is the
+    /// one that was already the recommendation, [`clipped`](GraphicsTarget::clipped),
+    /// which reports exactly its area. Documenting a "you account for it
+    /// yourself" contract instead would make the failure silent: an application
+    /// that forgot would push too little and leave stale pixels on the panel.
     pub fn display_mut(&mut self) -> &mut D {
+        self.dirty.all();
         self.display
     }
 }
@@ -453,6 +515,10 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
         (self.font.character_size.width + self.font.character_spacing).min(u16::MAX as u32) as u16
     }
 
+    fn take_dirty_rect(&mut self) -> Option<Area> {
+        self.dirty.take()
+    }
+
     /// Render `text` with its top-left at pixel `(x, y)`.
     ///
     /// Whether a style renders inverted (`Off` glyph on an `On` background) or
@@ -463,6 +529,7 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
     /// background pixel is drawn, which is required for correct inversion on
     /// a pixel display.
     fn draw_text(&mut self, x: u16, y: u16, text: &str, style: Style) {
+        self.mark_text(x, y, text);
         // Compute the pixel origin before borrowing `self.font`/`self.display`
         // simultaneously - the bounding_box() borrow ends here (NLL).
         let pos = self.px_point(x, y);
@@ -497,6 +564,7 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
         if matches!(border, BorderStyle::None) {
             return;
         }
+        self.mark(area);
 
         let rect = self.px_rect(area);
         let top_left = rect.top_left;
@@ -555,6 +623,7 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
 
     /// Fill the pixel region with `BinaryColor::Off` (clear).
     fn clear(&mut self, area: Area) {
+        self.mark(area);
         let rect = self.px_rect(area);
         let style = PrimitiveStyle::with_fill(BinaryColor::Off);
         let _ = rect.into_styled(style).draw(self.display);
@@ -566,6 +635,7 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
     /// indicator draws a `Muted` track and a `Focus` thumb that differ only in
     /// width, and inverting either would make it vanish.
     fn fill_rect(&mut self, area: Area, _style: Style) {
+        self.mark(area);
         let rect = self.px_rect(area);
         let style = PrimitiveStyle::with_fill(BinaryColor::On);
         let _ = rect.into_styled(style).draw(self.display);
@@ -580,6 +650,7 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
     /// Unlike [`fill_rect`](RenderTarget::fill_rect) the style is honoured here:
     /// a band is *meant* to disappear for a style the theme leaves plain.
     fn fill_band(&mut self, area: Area, style: Style) {
+        self.mark(area);
         let (_, bg) = self.mono_pair(style);
         self.fill_bg(area, bg);
     }
@@ -591,6 +662,7 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
     /// purpose (the scroll indicator depends on it), the free-hand primitives
     /// honour the style: a hand-drawn widget has nothing else to say "ink" with.
     fn set_pixel(&mut self, x: u16, y: u16, style: Style) {
+        self.mark(Area::new(x, y, 1, 1));
         let (fg, _) = self.mono_pair(style);
         let p = self.px_point(x, y);
         px_one(self.display, p, fg);
@@ -598,6 +670,7 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
 
     /// A native 1px line in the `style`'s foreground (no per-pixel dispatch).
     fn draw_line(&mut self, x0: u16, y0: u16, x1: u16, y1: u16, style: Style) {
+        self.mark(line_box(x0, y0, x1, y1));
         let (fg, _) = self.mono_pair(style);
         let (a, b) = (self.px_point(x0, y0), self.px_point(x1, y1));
         stroke_line(self.display, a, b, fg);
@@ -605,6 +678,7 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
 
     /// A 1px outline inside `area`, in the `style`'s foreground.
     fn draw_rect(&mut self, area: Area, style: Style) {
+        self.mark(area);
         let (fg, _) = self.mono_pair(style);
         let rect = self.px_rect(area);
         stroke_rect(self.display, rect, fg);
@@ -614,6 +688,7 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
     /// transparent - so an icon over a focus band inverts with the row instead
     /// of punching a hole in it.
     fn draw_bitmap(&mut self, area: Area, bits: &[u8], style: Style) {
+        self.mark(area);
         let (fg, _) = self.mono_pair(style);
         let origin = self.origin();
         blit(self.display, origin, area, bits, fg);
@@ -625,6 +700,7 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
     /// being edited passes `Style::Focus`; inverting on that would paint the
     /// fill `Off` on an `Off` background and the bar would disappear.
     fn draw_bar(&mut self, area: Area, fill_permille: u16, _style: Style) {
+        self.mark(area);
         let cell = self.px_rect(area);
         let (w, h) = (cell.size.width, cell.size.height);
         if w == 0 || h == 0 {
@@ -655,6 +731,7 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
     /// foreground ([`mono_pair`](GraphicsTarget::mono_pair)), so a focused
     /// indicator inverts along with its label.
     fn draw_check(&mut self, area: Area, on: bool, style: Style) {
+        self.mark(area);
         let (top, s) = indicator_square(self.px_rect(area));
         if s == 0 {
             return;
@@ -684,6 +761,7 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
     /// A circle radio; filled centre dot when `on`. Inverts with the `style`,
     /// like [`draw_check`](RenderTarget::draw_check).
     fn draw_radio(&mut self, area: Area, on: bool, style: Style) {
+        self.mark(area);
         let (top, d) = indicator_square(self.px_rect(area));
         if d == 0 {
             return;
@@ -707,6 +785,7 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
     /// A filled triangle expander (down = expanded, right = collapsed). Inverts
     /// with the `style`, like [`draw_check`](RenderTarget::draw_check).
     fn draw_expander(&mut self, area: Area, expanded: bool, style: Style) {
+        self.mark(area);
         let (top, s) = indicator_square(self.px_rect(area));
         if s == 0 {
             return;
@@ -722,6 +801,7 @@ impl<'a, D: DrawTarget<Color = BinaryColor>> RenderTarget for GraphicsTarget<'a,
     /// fall back to text. Both paths honour the `style`'s inversion, so one
     /// spinner does not change look between frame styles.
     fn draw_spinner(&mut self, area: Area, frame: char, style: Style) {
+        self.mark(area);
         let (fg, bg) = self.mono_pair(style);
         let tl = self.px_point(area.x, area.y);
         self.fill_bg(area, bg);
@@ -1106,6 +1186,7 @@ pub struct ColorGraphicsTarget<'a, D, C: PixelColor> {
     display: &'a mut D,
     font: MonoFont<'static>,
     theme: ColorTheme<C>,
+    dirty: DirtyRect,
 }
 
 impl<'a, D, C> ColorGraphicsTarget<'a, D, C>
@@ -1116,10 +1197,15 @@ where
 {
     /// Creates a target using the default [`ColorTheme`] for `C`.
     pub fn new(display: &'a mut D, font: MonoFont<'static>) -> Self {
+        let size = display.bounding_box().size;
         Self {
             display,
             font,
             theme: ColorTheme::default(),
+            dirty: DirtyRect::new(
+                size.width.min(u16::MAX as u32) as u16,
+                size.height.min(u16::MAX as u32) as u16,
+            ),
         }
     }
 }
@@ -1153,6 +1239,19 @@ where
         )
     }
 
+    /// Records `area` as touched - see [`GraphicsTarget::mark`] for the whole
+    /// of the bookkeeping.
+    fn mark(&mut self, area: Area) {
+        self.dirty.add(area);
+    }
+
+    /// Records the pixel box `text` occupies at `(x, y)`, by the font metrics -
+    /// the colour twin of [`GraphicsTarget::mark_text`].
+    fn mark_text(&mut self, x: u16, y: u16, text: &str) {
+        let (w, h) = (self.text_width(text), self.line_height());
+        self.mark(Area::new(x, y, w, h));
+    }
+
     /// The `(foreground, background)` colours this target renders `style` in -
     /// so drawing through [`clipped`](ColorGraphicsTarget::clipped) can stay on
     /// the theme instead of naming an `Rgb565`.
@@ -1162,15 +1261,19 @@ where
 
     /// The raw embedded-graphics `DrawTarget`, **clipped to `area`** - the
     /// escape hatch for arcs, images and fonts of your own. The colour twin of
-    /// [`GraphicsTarget::clipped`]; the same reasoning, and the same clip.
+    /// [`GraphicsTarget::clipped`]; the same reasoning, the same clip, and the
+    /// same conservative dirtying of `area` on the way out.
     pub fn clipped(&mut self, area: Area) -> Clipped<'_, D> {
+        self.mark(area);
         let rect = self.px_rect(area);
         self.display.clipped(&rect)
     }
 
     /// The underlying `DrawTarget`, **unclipped**. Prefer
-    /// [`clipped`](ColorGraphicsTarget::clipped).
+    /// [`clipped`](ColorGraphicsTarget::clipped) - this one marks the whole
+    /// panel dirty, for the reason [`GraphicsTarget::display_mut`] spells out.
     pub fn display_mut(&mut self) -> &mut D {
+        self.dirty.all();
         self.display
     }
 }
@@ -1200,10 +1303,15 @@ where
         (self.font.character_size.width + self.font.character_spacing).min(u16::MAX as u32) as u16
     }
 
+    fn take_dirty_rect(&mut self) -> Option<Area> {
+        self.dirty.take()
+    }
+
     /// Render `text` with its top-left at pixel `(x, y)`, in the theme's
     /// `(fg, bg)` for `style`. The background colour is always set so the whole
     /// cell repaints (required on a pixel display).
     fn draw_text(&mut self, x: u16, y: u16, text: &str, style: Style) {
+        self.mark_text(x, y, text);
         let pos = self.px_point(x, y);
         let (fg, bg) = self.theme.resolve(style);
         let char_style = MonoTextStyleBuilder::new()
@@ -1221,6 +1329,7 @@ where
         if matches!(border, BorderStyle::None) {
             return;
         }
+        self.mark(area);
         let rect = self.px_rect(area);
         let top_left = rect.top_left;
         let size = rect.size;
@@ -1276,6 +1385,7 @@ where
 
     /// Fill the pixel region with the `Normal` background colour.
     fn clear(&mut self, area: Area) {
+        self.mark(area);
         let rect = self.px_rect(area);
         let s = PrimitiveStyle::with_fill(self.theme.background(Style::Normal));
         let _ = rect.into_styled(s).draw(self.display);
@@ -1283,6 +1393,7 @@ where
 
     /// Fill the pixel region solid in the `style`'s foreground colour.
     fn fill_rect(&mut self, area: Area, style: Style) {
+        self.mark(area);
         let rect = self.px_rect(area);
         let s = PrimitiveStyle::with_fill(self.theme.foreground(style));
         let _ = rect.into_styled(s).draw(self.display);
@@ -1292,6 +1403,7 @@ where
     /// the theme pairs with that style's text (e.g. the selection's dark grey
     /// under `Focus`'s lilac), so the band and the text drawn over it agree.
     fn fill_band(&mut self, area: Area, style: Style) {
+        self.mark(area);
         let rect = self.px_rect(area);
         let s = PrimitiveStyle::with_fill(self.theme.background(style));
         let _ = rect.into_styled(s).draw(self.display);
@@ -1299,6 +1411,7 @@ where
 
     /// One pixel in the `style`'s foreground colour.
     fn set_pixel(&mut self, x: u16, y: u16, style: Style) {
+        self.mark(Area::new(x, y, 1, 1));
         let color = self.theme.foreground(style);
         let p = self.px_point(x, y);
         px_one(self.display, p, color);
@@ -1306,6 +1419,7 @@ where
 
     /// A native 1px line in the `style`'s foreground colour.
     fn draw_line(&mut self, x0: u16, y0: u16, x1: u16, y1: u16, style: Style) {
+        self.mark(line_box(x0, y0, x1, y1));
         let color = self.theme.foreground(style);
         let (a, b) = (self.px_point(x0, y0), self.px_point(x1, y1));
         stroke_line(self.display, a, b, color);
@@ -1313,6 +1427,7 @@ where
 
     /// A 1px outline inside `area`, in the `style`'s foreground colour.
     fn draw_rect(&mut self, area: Area, style: Style) {
+        self.mark(area);
         let color = self.theme.foreground(style);
         let rect = self.px_rect(area);
         stroke_rect(self.display, rect, color);
@@ -1321,6 +1436,7 @@ where
     /// A 1-bit sprite in the `style`'s foreground colour; clear bits leave
     /// whatever was underneath.
     fn draw_bitmap(&mut self, area: Area, bits: &[u8], style: Style) {
+        self.mark(area);
         let color = self.theme.foreground(style);
         let origin = self.origin();
         blit(self.display, origin, area, bits, color);
@@ -1330,6 +1446,7 @@ where
     /// the `style`'s colour (e.g. purple for `Accent`, lilac for `Focus`), filled
     /// to `fill_permille/1000`.
     fn draw_bar(&mut self, area: Area, fill_permille: u16, style: Style) {
+        self.mark(area);
         let cell = self.px_rect(area);
         let (w, h) = (cell.size.width, cell.size.height);
         if w == 0 || h == 0 {
@@ -1363,6 +1480,7 @@ where
 
     /// A rounded square checkbox in the `style`'s colour; filled when `on`.
     fn draw_check(&mut self, area: Area, on: bool, style: Style) {
+        self.mark(area);
         let (top, s) = indicator_square(self.px_rect(area));
         if s == 0 {
             return;
@@ -1390,6 +1508,7 @@ where
 
     /// A circle radio in the `style`'s colour; filled centre dot when `on`.
     fn draw_radio(&mut self, area: Area, on: bool, style: Style) {
+        self.mark(area);
         let (top, d) = indicator_square(self.px_rect(area));
         if d == 0 {
             return;
@@ -1412,6 +1531,7 @@ where
     /// A filled triangle expander in the `style`'s colour (down = expanded,
     /// right = collapsed).
     fn draw_expander(&mut self, area: Area, expanded: bool, style: Style) {
+        self.mark(area);
         let (top, s) = indicator_square(self.px_rect(area));
         if s == 0 {
             return;
@@ -1424,6 +1544,7 @@ where
     /// Pixel spinner frame in the `style`'s colour; Line-style glyphs fall back to
     /// text.
     fn draw_spinner(&mut self, area: Area, frame: char, style: Style) {
+        self.mark(area);
         let tl = self.px_point(area.x, area.y);
         let color = self.theme.foreground(style);
         if !spinner_pixels(self.display, tl, area, frame, color) {
@@ -2107,5 +2228,128 @@ mod tests {
             above.abs_diff(below) <= 1,
             "{above} lit rows above vs {below} below - the square is off-centre"
         );
+    }
+
+    // ── The dirty region ────────────────────────────────────────────────────
+
+    /// A frame in which nothing was drawn costs nothing to send.
+    #[test]
+    fn an_untouched_target_has_no_region() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        let mut disp = MockDisplay::<BinaryColor>::new();
+        let mut tgt = GraphicsTarget::new(&mut disp, FONT_6X10);
+        assert_eq!(tgt.take_dirty_rect(), None);
+    }
+
+    /// The region is one box over every call, and `take` means "sent".
+    #[test]
+    fn the_region_unions_the_calls_and_take_resets_it() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        let mut disp = MockDisplay::<BinaryColor>::new();
+        let mut tgt = GraphicsTarget::new(&mut disp, FONT_6X10);
+        tgt.fill_rect(Area::new(2, 4, 6, 2), Style::Normal); // 2..8  x 4..6
+        tgt.fill_rect(Area::new(20, 30, 4, 4), Style::Normal); // 20..24 x 30..34
+        assert_eq!(tgt.take_dirty_rect(), Some(Area::new(2, 4, 22, 30)));
+        assert_eq!(tgt.take_dirty_rect(), None);
+    }
+
+    /// Text dirties the cells its glyphs occupy - by the font's metrics, not the
+    /// row it sits on. FONT_6X10 on a 64px panel: two characters are 12px, not
+    /// 54 to the right edge.
+    #[test]
+    fn text_dirties_its_glyph_cells_only() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        for font_h in [10u16, 18] {
+            let font = if font_h == 10 {
+                FONT_6X10
+            } else {
+                embedded_graphics::mono_font::ascii::FONT_9X18_BOLD
+            };
+            let mut disp = MockDisplay::<BinaryColor>::new();
+            disp.set_allow_out_of_bounds_drawing(true);
+            let mut tgt = GraphicsTarget::new(&mut disp, font);
+            let (cw, lh) = (tgt.char_width(), tgt.line_height());
+            tgt.draw_text(10, 20, "Hi", Style::Normal);
+            assert_eq!(tgt.take_dirty_rect(), Some(Area::new(10, 20, 2 * cw, lh)));
+        }
+    }
+
+    /// The escape hatch draws behind the target's back, so handing it out is
+    /// itself the dirty event: `area` is in the region whether or not a pixel
+    /// was drawn through it. Over-reporting is the safe direction; a hatch that
+    /// did draw and was not counted would leave stale pixels on the panel.
+    #[test]
+    fn the_escape_hatch_is_counted_when_it_is_handed_out() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        let area = Area::new(4, 4, 6, 6);
+
+        let mut mono = MockDisplay::<BinaryColor>::new();
+        let mut tgt = GraphicsTarget::new(&mut mono, FONT_6X10);
+        {
+            let (ink, _) = tgt.colors(Style::Normal);
+            let mut raw = tgt.clipped(area);
+            Line::new(Point::new(0, 6), Point::new(40, 6))
+                .into_styled(PrimitiveStyle::with_stroke(ink, 1))
+                .draw(&mut raw)
+                .unwrap();
+        }
+        assert_eq!(tgt.take_dirty_rect(), Some(area));
+
+        let mut color = MockDisplay::<Rgb565>::new();
+        let mut ctgt = ColorGraphicsTarget::new(&mut color, FONT_6X10);
+        let _ = ctgt.clipped(area); // not one pixel drawn - still conservative
+        assert_eq!(ctgt.take_dirty_rect(), Some(area));
+    }
+
+    /// The unclipped hatch can paint any pixel, so it says so: the whole panel.
+    #[test]
+    fn the_unclipped_hatch_marks_the_whole_panel() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        let mut disp = MockDisplay::<BinaryColor>::new();
+        let (w, h) = {
+            let bb = disp.bounding_box().size;
+            (bb.width as u16, bb.height as u16)
+        };
+        let mut tgt = GraphicsTarget::new(&mut disp, FONT_6X10);
+        let _ = tgt.display_mut();
+        assert_eq!(tgt.take_dirty_rect(), Some(Area::new(0, 0, w, h)));
+    }
+
+    /// Both targets track, and they agree: the same calls give the same region.
+    #[test]
+    fn mono_and_colour_report_the_same_region() {
+        use embedded_graphics::mock_display::MockDisplay;
+        use embedded_graphics::mono_font::ascii::FONT_6X10;
+
+        let calls = |t: &mut dyn RenderTarget| {
+            t.clear(Area::new(0, 12, 40, 10));
+            t.draw_text(2, 12, "Ok", Style::Normal);
+            t.draw_line(4, 30, 9, 34, Style::Accent);
+        };
+
+        let mut mono = MockDisplay::<BinaryColor>::new();
+        mono.set_allow_overdraw(true);
+        let mut m = GraphicsTarget::new(&mut mono, FONT_6X10);
+        calls(&mut m);
+        let mono_region = m.take_dirty_rect();
+
+        let mut color = MockDisplay::<Rgb565>::new();
+        color.set_allow_overdraw(true);
+        let mut c = ColorGraphicsTarget::new(&mut color, FONT_6X10);
+        calls(&mut c);
+
+        // clear 0..40 x 12..22, text inside it, line 4..10 x 30..35.
+        assert_eq!(mono_region, Some(Area::new(0, 12, 40, 23)));
+        assert_eq!(c.take_dirty_rect(), mono_region);
     }
 }
