@@ -1,3 +1,5 @@
+use core::cell::Cell;
+
 use crate::{Area, Component, Msg, Outcome, RenderTarget, Style};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -77,10 +79,28 @@ impl<const N: usize> BarChartModel for [(&str, u16); N] {
 /// A horizontal bar chart: one row per datum - an ASCII label column, a smooth
 /// pixel bar (via [`draw_bar`](RenderTarget::draw_bar), which insets the fill so
 /// stacked rows keep a gap and don't merge), and the ASCII value right-aligned.
+///
+/// ## When it repaints
+///
+/// The chart borrows a [`BarChartModel`] it does not own, so - like a
+/// [`Canvas`](crate::Canvas) - it cannot notice its own data changing. That
+/// leaves the same two honest ways to run one:
+///
+/// - **built where it is drawn** (`BarChart::new(&data).view(..)`): fresh means
+///   dirty, so it repaints every frame. Right for live data, and it costs a
+///   repaint of its own area - nothing else on the screen widens because of it;
+/// - **kept as a field**, for data that changes now and then: it paints once
+///   and stays quiet until the owner calls
+///   [`mark_dirty`](Component::mark_dirty) where the data was changed.
 pub struct BarChart<'a, M: BarChartModel + ?Sized = [(&'a str, u16)]> {
     model: &'a M,
     max: u16,
     label_w: u16,
+    // Repaint gate. The chart cannot see its own data change - the model is
+    // borrowed, and reading it every frame to find out would cost more than
+    // the repaint - so the owner says when it did, exactly as for a `Canvas`.
+    // Starts dirty, so a chart built where it is drawn paints every frame.
+    dirty: Cell<bool>,
 }
 
 impl<'a, M: BarChartModel + ?Sized> BarChart<'a, M> {
@@ -89,6 +109,7 @@ impl<'a, M: BarChartModel + ?Sized> BarChart<'a, M> {
             model,
             max: 0,
             label_w: 36,
+            dirty: Cell::new(true),
         }
     }
 
@@ -173,6 +194,18 @@ impl<'a, M: BarChartModel + ?Sized> Component for BarChart<'a, M> {
             }
         }
     }
+
+    fn dirty(&self) -> bool {
+        self.dirty.get()
+    }
+
+    fn mark_clean(&self) {
+        self.dirty.set(false);
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.set(true);
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -241,6 +274,28 @@ mod tests {
         // 10/20 = 500, 5/20 = 250.
         assert!(bars(&t).iter().any(|(_, p, _)| *p == 500));
         assert!(bars(&t).iter().any(|(_, p, _)| *p == 250));
+    }
+
+    /// The chart reads a model it does not own, so it cannot see the data
+    /// change - which leaves two honest ways to run it, the same two a
+    /// [`Canvas`](crate::Canvas) has. Built per frame it is dirty by
+    /// construction; kept as a field it paints once and waits to be told.
+    #[test]
+    fn barchart_paints_once_and_waits_to_be_told() {
+        let chart = BarChart::new(DATA);
+        assert!(chart.dirty(), "a fresh chart owes its first paint");
+
+        let mut t = RecordingTarget::new(120, 30);
+        let area = Area::new(0, 0, 120, 30);
+        chart.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), Some(area));
+
+        chart.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), None, "unchanged data, nothing to send");
+
+        chart.mark_dirty(); // the owner changed the data behind it
+        chart.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), Some(area));
     }
 
     #[test]

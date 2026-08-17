@@ -1,3 +1,5 @@
+use core::cell::Cell;
+
 use crate::{Area, Component, Msg, Outcome, RenderTarget, Style};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -20,6 +22,10 @@ pub struct StatusBar<'a> {
     center: &'a str,
     right: &'a str,
     style: Style,
+    // Repaint gate: set when a segment's text actually changes. Chrome spans
+    // the panel, so an ungated one would stretch the dirty region across the
+    // full width on every frame. Starts dirty so the first frame draws.
+    dirty: Cell<bool>,
 }
 
 impl<'a> StatusBar<'a> {
@@ -29,6 +35,7 @@ impl<'a> StatusBar<'a> {
             center: "",
             right: "",
             style: Style::Muted,
+            dirty: Cell::new(true),
         }
     }
 
@@ -52,16 +59,29 @@ impl<'a> StatusBar<'a> {
         self
     }
 
+    /// Sets the left segment. Setting it to the text it already shows is not a
+    /// change - a host that re-asserts the same hint every frame costs nothing.
     pub fn set_left(&mut self, s: &'a str) {
-        self.left = s;
+        if s != self.left {
+            self.left = s;
+            self.dirty.set(true);
+        }
     }
 
+    /// Sets the centre segment; dirties only on a real change.
     pub fn set_center(&mut self, s: &'a str) {
-        self.center = s;
+        if s != self.center {
+            self.center = s;
+            self.dirty.set(true);
+        }
     }
 
+    /// Sets the right segment; dirties only on a real change.
     pub fn set_right(&mut self, s: &'a str) {
-        self.right = s;
+        if s != self.right {
+            self.right = s;
+            self.dirty.set(true);
+        }
     }
 }
 
@@ -111,6 +131,18 @@ impl<'a> Component for StatusBar<'a> {
                 target.draw_text(area.x + (area.w - cwid) / 2, ty, self.center, self.style);
             }
         }
+    }
+
+    fn dirty(&self) -> bool {
+        self.dirty.get()
+    }
+
+    fn mark_clean(&self) {
+        self.dirty.set(false);
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.set(true);
     }
 }
 
@@ -164,6 +196,40 @@ mod tests {
             .view(&mut t, Area::new(0, 0, 120, 12));
         // "MID" = 18px → x = (120 - 18) / 2 = 51.
         assert!(texts(&t).iter().any(|(x, _, s, _)| *x == 51 && s == "MID"));
+    }
+
+    /// Chrome is the worst thing to leave always-dirty: it spans the panel, so
+    /// repainting it for nothing stretches the region across the whole width
+    /// every frame. It dirties when its text actually changes, and not before.
+    #[test]
+    fn statusbar_only_dirties_when_a_segment_changes() {
+        let mut bar = StatusBar::new().with_left("Ready");
+        assert!(bar.dirty(), "a fresh bar owes its first paint");
+        bar.mark_clean();
+
+        bar.set_left("Ready"); // the same hint, frame after frame
+        assert!(!bar.dirty());
+        bar.set_center("");
+        bar.set_right("");
+        assert!(!bar.dirty());
+
+        bar.set_left("Saving");
+        assert!(bar.dirty());
+        bar.mark_clean();
+        bar.set_right("100%");
+        assert!(bar.dirty());
+    }
+
+    /// ...and a clean one draws nothing, so it costs the region nothing.
+    #[test]
+    fn a_clean_statusbar_leaves_the_region_empty() {
+        let bar = StatusBar::new().with_left("Ready");
+        let mut t = RecordingTarget::new(320, 240);
+        let area = Area::new(0, 228, 320, 12);
+        bar.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), Some(area));
+        bar.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), None);
     }
 
     #[test]

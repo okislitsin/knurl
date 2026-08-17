@@ -1,3 +1,5 @@
+use core::cell::Cell;
+
 use crate::{Area, Component, Entry, FocusZone, Msg, Outcome, RenderTarget, Style};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -51,6 +53,12 @@ pub struct Tabs<'a> {
     titles: &'a [&'a str],
     selected: usize,
     focused: bool,
+    // Repaint gate: set when the tab or the focus state actually changes -
+    // the two things the strip draws. Both are re-asserted constantly (a
+    // `TabPages` sets the focus flag on every event), so "changed" has to mean
+    // changed, or the strip would pull the dirty region up to the top of the
+    // panel on every keystroke in the page below it.
+    dirty: Cell<bool>,
 }
 
 impl<'a> Tabs<'a> {
@@ -59,13 +67,18 @@ impl<'a> Tabs<'a> {
             titles,
             selected: 0,
             focused: false,
+            dirty: Cell::new(true),
         }
     }
 
     /// Whether the encoder is on the strip - see the type docs for what the
-    /// four states look like. Set by [`TabPages`] when the strip is inside one.
+    /// four states look like. Set by [`TabPages`] when the strip is inside one,
+    /// on **every** event, so only an actual move marks the strip for repaint.
     pub fn set_focused(&mut self, focused: bool) {
-        self.focused = focused;
+        if focused != self.focused {
+            self.focused = focused;
+            self.dirty.set(true);
+        }
     }
 
     /// Whether the strip currently holds the encoder.
@@ -92,21 +105,29 @@ impl<'a> Tabs<'a> {
     pub fn set_selected(&mut self, idx: usize) {
         let n = self.titles.len();
         if n > 0 {
-            self.selected = idx.min(n - 1);
+            self.select(idx.min(n - 1));
         }
     }
 
     /// Advances to the next tab, stopping at the last.
     pub fn next(&mut self) {
         if self.selected + 1 < self.titles.len() {
-            self.selected += 1;
+            self.select(self.selected + 1);
         }
     }
 
     /// Returns to the previous tab, stopping at the first.
     pub fn prev(&mut self) {
         if self.selected > 0 {
-            self.selected -= 1;
+            self.select(self.selected - 1);
+        }
+    }
+
+    /// The one place the selection moves - and the one place it dirties.
+    fn select(&mut self, idx: usize) {
+        if idx != self.selected {
+            self.selected = idx;
+            self.dirty.set(true);
         }
     }
 }
@@ -134,11 +155,11 @@ impl<'a> Component for Tabs<'a> {
     // does not - that the focus can be on the strip *or* in the page below it -
     // and sets the flag itself.
     fn focus(&mut self) {
-        self.focused = true;
+        self.set_focused(true);
     }
 
     fn blur(&mut self) {
-        self.focused = false;
+        self.set_focused(false);
     }
 
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
@@ -177,6 +198,18 @@ impl<'a> Component for Tabs<'a> {
 
             x = x.saturating_add(tw).saturating_add(TAB_GAP);
         }
+    }
+
+    fn dirty(&self) -> bool {
+        self.dirty.get()
+    }
+
+    fn mark_clean(&self) {
+        self.dirty.set(false);
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.set(true);
     }
 }
 
@@ -573,6 +606,66 @@ mod tests {
                 .iter()
                 .any(|(a, st)| a.h == ACTIVE_RULE_PX && a.x == 26 && *st == Style::Accent)
         );
+    }
+
+    // ── The dirty gate ──────────────────────────────────────────────────────
+
+    /// The strip is drawn on every screen that has tabs, so leaving it
+    /// always-dirty pulls the region up to the top of the panel each frame -
+    /// including on frames where the user was editing a field three rows down.
+    #[test]
+    fn tabs_only_dirty_when_the_strip_changes() {
+        let mut tabs = Tabs::new(T);
+        assert!(tabs.dirty(), "a fresh strip owes its first paint");
+        tabs.mark_clean();
+
+        let _ = tabs.update(&Msg::Up); // already on the first tab
+        assert!(!tabs.dirty(), "an edge changed nothing");
+        let _ = tabs.update(&Msg::Down);
+        assert!(tabs.dirty(), "switched tab");
+
+        tabs.mark_clean();
+        tabs.set_selected(1); // where it already is
+        assert!(!tabs.dirty());
+        tabs.set_selected(0);
+        assert!(tabs.dirty());
+    }
+
+    /// The strip renders four states, and two of them differ only by where the
+    /// encoder is - so the focus flag has to dirty it, and only when it moves.
+    /// `TabPages` re-asserts the flag on every single event.
+    #[test]
+    fn tabs_dirty_when_the_encoder_arrives_or_leaves() {
+        let mut tabs = Tabs::new(T);
+        tabs.mark_clean();
+
+        tabs.set_focused(false); // already unfocused
+        assert!(!tabs.dirty());
+        tabs.set_focused(true);
+        assert!(tabs.dirty(), "the active tab's rule just got heavier");
+
+        tabs.mark_clean();
+        tabs.set_focused(true); // re-asserted every event by TabPages
+        assert!(!tabs.dirty());
+
+        tabs.blur();
+        assert!(tabs.dirty());
+        tabs.mark_clean();
+        tabs.focus();
+        assert!(tabs.dirty());
+    }
+
+    /// A clean strip draws nothing, so it is not in the region at all - which
+    /// is what keeps a keystroke inside a tab's form off the top of the panel.
+    #[test]
+    fn a_clean_strip_leaves_the_region_empty() {
+        let tabs = Tabs::new(T);
+        let mut t = RecordingTarget::new(128, 64);
+        let strip = Area::new(0, 0, 128, 10);
+        tabs.view(&mut t, strip);
+        assert_eq!(t.take_dirty_rect(), Some(strip));
+        tabs.view(&mut t, strip);
+        assert_eq!(t.take_dirty_rect(), None);
     }
 
     // ── Outcome (event routing) ─────────────────────────────────────────────
