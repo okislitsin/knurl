@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/okislitsin/knurl/compare/knurl-core-v0.3.0...knurl-core-v0.4.0) - 2026-08-17
+
+### Added
+
+- *(core)* Tree's leaf cursor is a Marker like everybody else's
+- *(core)* Canvas - free-hand drawing without declaring a type
+- *(core)* four primitives so a widget can draw for itself
+
+### Fixed
+
+- *(core)* a dialog with no buttons has nothing to confirm
+- *(core)* the tab strip says where the encoder is, and which tab is on
+
+### Other
+
+- *(readme)* free-hand primitives, Canvas and the escape hatch
+- *(core)* Msg's extra buttons are an extension point, not dead code
+
 ## [0.3.0](https://github.com/okislitsin/knurl/compare/knurl-core-v0.2.0...knurl-core-v0.3.0) - 2026-08-16
 
 ### Added

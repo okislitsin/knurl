@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5](https://github.com/okislitsin/knurl/compare/knurl-graphics-v0.1.4...knurl-graphics-v0.1.5) - 2026-08-17
+
+### Added
+
+- *(graphics)* an escape hatch to embedded-graphics, clipped to the area
+- *(graphics)* the pixel targets draw the primitives natively
+
+### Other
+
+- *(readme)* free-hand primitives, Canvas and the escape hatch
+
 ## [0.1.4](https://github.com/okislitsin/knurl/compare/knurl-graphics-v0.1.3...knurl-graphics-v0.1.4) - 2026-08-16
 
 ### Other

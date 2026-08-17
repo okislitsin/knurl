@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/okislitsin/knurl/compare/knurl-v0.2.0...knurl-v0.2.1) - 2026-08-17
+
+### Added
+
+- *(core)* Canvas - free-hand drawing without declaring a type
+- *(core)* four primitives so a widget can draw for itself
+
+### Other
+
+- *(readme)* free-hand primitives, Canvas and the escape hatch
+
 ## [0.2.0](https://github.com/okislitsin/knurl/compare/knurl-v0.1.3...knurl-v0.2.0) - 2026-08-16
 
 ### Added
