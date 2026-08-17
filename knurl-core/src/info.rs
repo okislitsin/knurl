@@ -162,11 +162,18 @@ impl Component for Spinner {
 pub struct ProgressBar {
     value: u16,
     max: u16,
+    // Repaint gate: set when the value actually moves. Starts dirty so the
+    // first frame always draws.
+    dirty: Cell<bool>,
 }
 
 impl ProgressBar {
     pub const fn new() -> Self {
-        Self { value: 0, max: 100 }
+        Self {
+            value: 0,
+            max: 100,
+            dirty: Cell::new(true),
+        }
     }
 
     pub const fn with_max(mut self, max: u16) -> Self {
@@ -178,9 +185,15 @@ impl ProgressBar {
         self.value
     }
 
-    /// Sets the value, clamped into `0..=max`.
+    /// Sets the value, clamped into `0..=max`. A value that lands where it
+    /// already was is not a change: with a dirty region on the bus, repainting
+    /// on it would widen the region for a picture nobody can tell apart.
     pub fn set_value(&mut self, v: u16) {
-        self.value = v.min(self.max);
+        let clamped = v.min(self.max);
+        if clamped != self.value {
+            self.value = clamped;
+            self.dirty.set(true);
+        }
     }
 
     fn permille(&self) -> u16 {
@@ -215,6 +228,18 @@ impl Component for ProgressBar {
         }
         target.draw_bar(area, self.permille(), Style::Accent);
     }
+
+    fn dirty(&self) -> bool {
+        self.dirty.get()
+    }
+
+    fn mark_clean(&self) {
+        self.dirty.set(false);
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.set(true);
+    }
 }
 
 // ── LineGauge ─────────────────────────────────────────────────────────────────
@@ -225,11 +250,17 @@ impl Component for ProgressBar {
 pub struct LineGauge {
     value: u16,
     max: u16,
+    // Repaint gate, as in `ProgressBar`.
+    dirty: Cell<bool>,
 }
 
 impl LineGauge {
     pub const fn new() -> Self {
-        Self { value: 0, max: 100 }
+        Self {
+            value: 0,
+            max: 100,
+            dirty: Cell::new(true),
+        }
     }
 
     pub const fn with_max(mut self, max: u16) -> Self {
@@ -241,9 +272,14 @@ impl LineGauge {
         self.value
     }
 
-    /// Sets the value, clamped into `0..=max`.
+    /// Sets the value, clamped into `0..=max` - and dirties only on a real
+    /// move, like [`ProgressBar::set_value`].
     pub fn set_value(&mut self, v: u16) {
-        self.value = v.min(self.max);
+        let clamped = v.min(self.max);
+        if clamped != self.value {
+            self.value = clamped;
+            self.dirty.set(true);
+        }
     }
 }
 
@@ -298,6 +334,18 @@ impl Component for LineGauge {
             target.draw_text(px + target.text_width(ps), area.y, "%", Style::Normal);
         }
     }
+
+    fn dirty(&self) -> bool {
+        self.dirty.get()
+    }
+
+    fn mark_clean(&self) {
+        self.dirty.set(false);
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.set(true);
+    }
 }
 
 // ── Scrollbar ─────────────────────────────────────────────────────────────────
@@ -313,6 +361,9 @@ pub struct Scrollbar {
     total: usize,
     window: usize,
     offset: usize,
+    // Repaint gate. The view re-asserts the geometry every frame, so "set to
+    // what it already was" is the ordinary case here, not the edge one.
+    dirty: Cell<bool>,
 }
 
 impl Scrollbar {
@@ -321,14 +372,20 @@ impl Scrollbar {
             total: 0,
             window: 0,
             offset: 0,
+            dirty: Cell::new(true),
         }
     }
 
-    /// Updates the scroll geometry - call once per frame from the view.
+    /// Updates the scroll geometry - call once per frame from the view. Only a
+    /// geometry that actually moved marks it for repaint.
     pub fn set(&mut self, total: usize, window: usize, offset: usize) {
+        if (total, window, offset) == (self.total, self.window, self.offset) {
+            return;
+        }
         self.total = total;
         self.window = window;
         self.offset = offset;
+        self.dirty.set(true);
     }
 }
 
@@ -356,6 +413,18 @@ impl Component for Scrollbar {
         let window = self.window.max(1);
         draw_v_scroll(target, area, self.total.max(window), window, self.offset);
     }
+
+    fn dirty(&self) -> bool {
+        self.dirty.get()
+    }
+
+    fn mark_clean(&self) {
+        self.dirty.set(false);
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.set(true);
+    }
 }
 
 // ── Paginator ─────────────────────────────────────────────────────────────────
@@ -368,6 +437,8 @@ pub struct Paginator {
     pages: usize,
     current: usize,
     numeric: bool,
+    // Repaint gate: set when the current page actually changes.
+    dirty: Cell<bool>,
 }
 
 impl Paginator {
@@ -376,6 +447,7 @@ impl Paginator {
             pages,
             current: 0,
             numeric: false,
+            dirty: Cell::new(true),
         }
     }
 
@@ -394,24 +466,33 @@ impl Paginator {
         self.current
     }
 
-    /// Sets the current page, clamped into `[0, pages - 1]`.
+    /// Sets the current page, clamped into `[0, pages - 1]`. Landing on the
+    /// page it is already on is not a change.
     pub fn set_current(&mut self, idx: usize) {
         if self.pages > 0 {
-            self.current = idx.min(self.pages - 1);
+            self.set_page(idx.min(self.pages - 1));
         }
     }
 
     /// Advances to the next page, stopping at the last.
     pub fn next(&mut self) {
         if self.current + 1 < self.pages {
-            self.current += 1;
+            self.set_page(self.current + 1);
         }
     }
 
     /// Returns to the previous page, stopping at the first.
     pub fn prev(&mut self) {
         if self.current > 0 {
-            self.current -= 1;
+            self.set_page(self.current - 1);
+        }
+    }
+
+    /// The one place the page moves - and the one place it dirties.
+    fn set_page(&mut self, idx: usize) {
+        if idx != self.current {
+            self.current = idx;
+            self.dirty.set(true);
         }
     }
 }
@@ -469,6 +550,18 @@ impl Component for Paginator {
                 );
             }
         }
+    }
+
+    fn dirty(&self) -> bool {
+        self.dirty.get()
+    }
+
+    fn mark_clean(&self) {
+        self.dirty.set(false);
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.set(true);
     }
 }
 
@@ -692,6 +785,101 @@ mod tests {
         assert!(tx.iter().any(|(x, _, s, _)| *x == 0 && s == "2"));
         assert!(tx.iter().any(|(_, _, s, _)| s == "/"));
         assert!(tx.iter().any(|(_, _, s, _)| s == "5"));
+    }
+
+    // ── The dirty gate ────────────────────────────────────────────────────────
+
+    /// The gate every stateful widget has: a fresh one owes its first paint, a
+    /// painted one goes quiet, and a **no-op setter does not dirty it**. With a
+    /// dirty region on the bus that last one is the whole point - a value set to
+    /// what it already was would otherwise widen the region for nothing.
+    #[test]
+    fn progressbar_only_dirties_on_a_real_change() {
+        let mut p = ProgressBar::new();
+        assert!(p.dirty(), "a fresh widget owes its first paint");
+        p.mark_clean();
+
+        p.set_value(0); // already 0
+        assert!(!p.dirty());
+        p.set_value(40);
+        assert!(p.dirty());
+
+        p.mark_clean();
+        p.set_value(40); // the same value again
+        assert!(!p.dirty());
+
+        p.set_value(999); // clamps to 100, which is a change
+        assert!(p.dirty());
+        p.mark_clean();
+        p.set_value(998); // clamps to 100 again - nothing moved
+        assert!(!p.dirty());
+    }
+
+    #[test]
+    fn linegauge_only_dirties_on_a_real_change() {
+        let mut g = LineGauge::new();
+        assert!(g.dirty());
+        g.mark_clean();
+
+        g.set_value(0);
+        assert!(!g.dirty());
+        g.set_value(70);
+        assert!(g.dirty());
+        g.mark_clean();
+        g.set_value(70);
+        assert!(!g.dirty());
+    }
+
+    /// A scrollbar is refreshed from the view every frame, so "set to what it
+    /// already was" is its *normal* case, not an edge one.
+    #[test]
+    fn scrollbar_only_dirties_when_the_geometry_moves() {
+        let mut s = Scrollbar::new();
+        s.set(10, 3, 0);
+        s.mark_clean();
+
+        s.set(10, 3, 0);
+        assert!(!s.dirty(), "the same geometry, frame after frame");
+        s.set(10, 3, 1);
+        assert!(s.dirty(), "scrolled one item");
+        s.mark_clean();
+        s.set(12, 3, 1);
+        assert!(s.dirty(), "the list grew");
+    }
+
+    #[test]
+    fn paginator_only_dirties_when_the_page_changes() {
+        let mut p = Paginator::new(3);
+        p.mark_clean();
+
+        let _ = p.update(&Msg::Left); // already on the first page
+        assert!(!p.dirty());
+        let _ = p.update(&Msg::Right);
+        assert!(p.dirty());
+
+        p.mark_clean();
+        p.set_current(1); // where it already is
+        assert!(!p.dirty());
+        p.next();
+        assert!(p.dirty());
+        p.mark_clean();
+        p.next(); // last page: nowhere to go
+        assert!(!p.dirty());
+    }
+
+    /// A gated widget that is clean draws nothing at all - the region stays
+    /// empty and the frame costs zero bytes.
+    #[test]
+    fn a_clean_indicator_leaves_the_region_empty() {
+        let mut p = ProgressBar::new();
+        p.set_value(30);
+        let mut t = RecordingTarget::new(128, 64);
+        let area = Area::new(0, 20, 128, 10);
+        p.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), Some(area));
+
+        p.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), None);
     }
 
     #[test]

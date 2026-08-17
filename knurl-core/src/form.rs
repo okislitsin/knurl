@@ -667,6 +667,49 @@ mod tests {
         }
     }
 
+    /// The form's re-layout clear and each field's own row clear overlap on a
+    /// structural frame - two clears where one would do. On the **region** that
+    /// costs nothing: the rows are inside the area, so the union is the area
+    /// either way, and a structural frame was always going to repaint all of
+    /// it. What matters is the frame after: no re-layout, one field dirty, and
+    /// the region is that field's row alone.
+    #[test]
+    fn the_forms_double_clear_does_not_widen_the_region() {
+        let area = Area::new(0, 20, 120, 30);
+        let mut a = Gated::new("A", 10);
+        let mut b = Gated::new("B", 10);
+        let mut c = Gated::new("C", 10);
+        let form = Form::new();
+        let mut t = RecordingTarget::new(128, 64);
+
+        {
+            let fields: [&mut dyn FormField; 3] = [&mut a, &mut b, &mut c];
+            // First frame: a re-layout. The form clears `area`, every field
+            // then clears its own row inside it.
+            form.view(&mut t, area, &fields);
+            let clears = t
+                .ops()
+                .iter()
+                .filter(|op| matches!(op, Op::Clear { .. }))
+                .count();
+            assert_eq!(clears, 4, "the area plus one row per field");
+            assert_eq!(
+                t.take_dirty_rect(),
+                Some(area),
+                "overlapping clears union back to the same box"
+            );
+
+            // Nothing moved: no clear, nothing drawn, nothing to send.
+            form.view(&mut t, area, &fields);
+            assert_eq!(t.take_dirty_rect(), None);
+
+            // One field changes: only its row.
+            fields[1].mark_dirty();
+            form.view(&mut t, area, &fields);
+            assert_eq!(t.take_dirty_rect(), Some(Area::new(0, 30, 120, 10)));
+        }
+    }
+
     #[test]
     fn form_select_toggles_momentary() {
         let mut cb = Checkbox::new("A");
