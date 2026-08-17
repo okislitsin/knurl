@@ -1,6 +1,4 @@
-use core::cell::Cell;
-
-use crate::{Area, Component, Msg, Outcome, RenderTarget, Style};
+use crate::{Area, Component, DataGate, Msg, Outcome, RenderTarget, Style};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -46,6 +44,14 @@ pub trait BarChartModel {
     }
     fn label(&self, i: usize) -> &str;
     fn value(&self, i: usize) -> u16;
+
+    /// A number that changes whenever the values do - see
+    /// [`ListModel::revision`](crate::ListModel::revision), which this mirrors.
+    /// The default is a constant ("I keep no revision"), so a chart built where
+    /// it is drawn (dirty by construction) behaves as before.
+    fn revision(&self) -> u32 {
+        0
+    }
 }
 
 /// Static impl over a slice of `(label, value)` pairs.
@@ -82,25 +88,29 @@ impl<const N: usize> BarChartModel for [(&str, u16); N] {
 ///
 /// ## When it repaints
 ///
-/// The chart borrows a [`BarChartModel`] it does not own, so - like a
-/// [`Canvas`](crate::Canvas) - it cannot notice its own data changing. That
-/// leaves the same two honest ways to run one:
+/// The chart borrows a [`BarChartModel`] it does not own, which leaves three
+/// ways to run one - in the order worth trying them:
 ///
+/// - **the model keeps a [`revision`](BarChartModel::revision)**: the chart
+///   compares it against the one on screen and repaints itself when the values
+///   move. Self-service, and the only one nobody can forget;
 /// - **built where it is drawn** (`BarChart::new(&data).view(..)`): fresh means
-///   dirty, so it repaints every frame. Right for live data, and it costs a
-///   repaint of its own area - nothing else on the screen widens because of it;
-/// - **kept as a field**, for data that changes now and then: it paints once
-///   and stays quiet until the owner calls
-///   [`mark_dirty`](Component::mark_dirty) where the data was changed.
+///   dirty, so it repaints every frame. Right for values that change every
+///   tick, and it costs a repaint of its own area - nothing else on the screen
+///   widens because of it;
+/// - **kept as a field over a model with no revision**: it paints once and
+///   stays quiet until the owner calls [`mark_dirty`](Component::mark_dirty)
+///   where the data was changed. Honest, cheap, and the one that goes stale
+///   when somebody forgets.
 pub struct BarChart<'a, M: BarChartModel + ?Sized = [(&'a str, u16)]> {
     model: &'a M,
     max: u16,
     label_w: u16,
-    // Repaint gate. The chart cannot see its own data change - the model is
-    // borrowed, and reading it every frame to find out would cost more than
-    // the repaint - so the owner says when it did, exactly as for a `Canvas`.
-    // Starts dirty, so a chart built where it is drawn paints every frame.
-    dirty: Cell<bool>,
+    // Repaint gate: the chart's own flag, plus the model revision it last
+    // painted. Starts dirty, so a chart built where it is drawn paints every
+    // frame; a model that keeps no revision leaves the plain flag, which is the
+    // owner's `mark_dirty()`.
+    gate: DataGate,
 }
 
 impl<'a, M: BarChartModel + ?Sized> BarChart<'a, M> {
@@ -109,7 +119,7 @@ impl<'a, M: BarChartModel + ?Sized> BarChart<'a, M> {
             model,
             max: 0,
             label_w: 36,
-            dirty: Cell::new(true),
+            gate: DataGate::new(),
         }
     }
 
@@ -196,15 +206,15 @@ impl<'a, M: BarChartModel + ?Sized> Component for BarChart<'a, M> {
     }
 
     fn dirty(&self) -> bool {
-        self.dirty.get()
+        self.gate.is_dirty(self.model.revision())
     }
 
     fn mark_clean(&self) {
-        self.dirty.set(false);
+        self.gate.mark_clean(self.model.revision());
     }
 
     fn mark_dirty(&self) {
-        self.dirty.set(true);
+        self.gate.mark_dirty();
     }
 }
 
@@ -213,6 +223,8 @@ impl<'a, M: BarChartModel + ?Sized> Component for BarChart<'a, M> {
 #[cfg(test)]
 mod tests {
     extern crate alloc;
+
+    use core::cell::Cell;
 
     use super::*;
     use crate::mock::{Op, RecordingTarget};
@@ -296,6 +308,47 @@ mod tests {
         chart.mark_dirty(); // the owner changed the data behind it
         chart.view(&mut t, area);
         assert_eq!(t.take_dirty_rect(), Some(area));
+    }
+
+    /// ...or the model says so itself, and then nobody has to remember.
+    #[test]
+    fn barchart_follows_a_model_that_keeps_a_revision() {
+        struct Channels {
+            values: Cell<u16>,
+            writes: Cell<u32>,
+        }
+        impl BarChartModel for Channels {
+            fn len(&self) -> usize {
+                1
+            }
+            fn label(&self, _i: usize) -> &str {
+                "Cpu"
+            }
+            fn value(&self, _i: usize) -> u16 {
+                self.values.get()
+            }
+            fn revision(&self) -> u32 {
+                self.writes.get()
+            }
+        }
+
+        let data = Channels {
+            values: Cell::new(10),
+            writes: Cell::new(0),
+        };
+        let chart = BarChart::new(&data).with_max(100);
+        let area = Area::new(0, 0, 120, 30);
+        let mut t = RecordingTarget::new(120, 30);
+
+        chart.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), Some(area));
+        chart.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), None, "the same values");
+
+        data.values.set(40);
+        data.writes.set(1);
+        chart.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), Some(area), "a bar moved");
     }
 
     #[test]

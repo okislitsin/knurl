@@ -1,7 +1,9 @@
 use core::cell::Cell;
 use core::fmt::Write;
 
-use crate::{Area, Component, Msg, Outcome, RenderTarget, Scrollbar, Style, V_SCROLL_RESERVE};
+use crate::{
+    Area, Component, DataGate, Msg, Outcome, RenderTarget, Scrollbar, Style, V_SCROLL_RESERVE,
+};
 
 // ── LinesModel (data provider for text) ─────────────────────────────────────
 
@@ -25,6 +27,17 @@ pub trait LinesModel {
     /// [`get_line`]: LinesModel::get_line
     fn write_line(&self, i: usize, out: &mut dyn Write) {
         let _ = out.write_str(self.get_line(i));
+    }
+
+    /// A number that changes whenever the text does - the same self-service a
+    /// [`ListModel`](crate::ListModel::revision) offers, and the one that
+    /// matters most here: a log gains a line without any input at all, and a
+    /// [`Pager`] not in follow mode has nothing else to notice it by.
+    ///
+    /// The default is a constant ("I keep no revision"), so a `const` array of
+    /// lines costs nothing and behaves as before.
+    fn revision(&self) -> u32 {
+        0
     }
 }
 
@@ -142,8 +155,10 @@ pub struct Pager<'a, M: LinesModel + ?Sized = [&'a str]> {
     page_rows: Cell<usize>,
     wrap_cols: Cell<usize>,
     // Repaint gate: set when the offset or the follow flag actually moves.
-    // Starts dirty so the first frame always draws.
-    dirty: Cell<bool>,
+    // Starts dirty so the first frame always draws. It also carries the model
+    // revision that was painted - which is the only way a pager sitting still
+    // over a growing log notices the new lines (see `LinesModel::revision`).
+    gate: DataGate,
 }
 
 impl<'a, M: LinesModel + ?Sized> Pager<'a, M> {
@@ -154,7 +169,7 @@ impl<'a, M: LinesModel + ?Sized> Pager<'a, M> {
             follow: false,
             page_rows: Cell::new(usize::MAX),
             wrap_cols: Cell::new(usize::MAX),
-            dirty: Cell::new(true),
+            gate: DataGate::new(),
         }
     }
 
@@ -276,7 +291,7 @@ impl<'a, M: LinesModel + ?Sized> Component for Pager<'a, M> {
             self.offset = self.max_offset();
         }
         if (self.offset, self.follow) != before {
-            self.dirty.set(true);
+            self.gate.mark_dirty();
         }
         // Scrolling that moved the view - or dropped out of / re-entered tail
         // mode - used the event up; a `Tick` counts only while following, and
@@ -346,15 +361,15 @@ impl<'a, M: LinesModel + ?Sized> Component for Pager<'a, M> {
     }
 
     fn dirty(&self) -> bool {
-        self.dirty.get()
+        self.gate.is_dirty(self.model.revision())
     }
 
     fn mark_clean(&self) {
-        self.dirty.set(false);
+        self.gate.mark_clean(self.model.revision());
     }
 
     fn mark_dirty(&self) {
-        self.dirty.set(true);
+        self.gate.mark_dirty();
     }
 }
 
@@ -618,5 +633,56 @@ mod tests {
         let mut t2 = RecordingTarget::new(120, 30);
         still.view(&mut t2, Area::new(0, 0, 120, 30));
         assert_eq!(still.update(&Msg::Tick), Outcome::Ignored);
+    }
+
+    // ── A log that keeps a revision ─────────────────────────────────────────
+
+    /// The same live stream, now saying when it grew.
+    struct Log {
+        count: Cell<usize>,
+    }
+
+    impl LinesModel for Log {
+        fn line_count(&self) -> usize {
+            self.count.get()
+        }
+        fn get_line(&self, _i: usize) -> &str {
+            "log line"
+        }
+        // The line count *is* the revision here - nothing extra to store.
+        fn revision(&self) -> u32 {
+            self.count.get() as u32
+        }
+    }
+
+    /// The case the revision exists for. A log short enough to fit has nothing
+    /// to scroll, so follow mode never moves the offset and the pager's own
+    /// state never changes - and before the revision, a line appended here was
+    /// simply never drawn.
+    #[test]
+    fn a_pager_shows_a_new_line_that_moved_nothing_else() {
+        let log = Log {
+            count: Cell::new(1),
+        };
+        let p = Pager::new(&log).with_follow(true);
+        let area = Area::new(0, 0, 60, 30); // 3 rows for 1 line
+        let mut t = RecordingTarget::new(64, 32);
+
+        p.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), Some(area));
+        assert_eq!(texts(&t).len(), 1);
+
+        p.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), None, "an idle log costs nothing");
+
+        log.count.set(2); // a line arrives; the offset stays at 0
+        let mut after = RecordingTarget::new(64, 32);
+        p.view(&mut after, area);
+        assert!(
+            after.take_dirty_rect().is_some(),
+            "the new line was never drawn"
+        );
+        assert_eq!(texts(&after).len(), 2, "both lines on the panel");
+        assert_eq!(p.offset(), 0, "and nothing scrolled to make it happen");
     }
 }

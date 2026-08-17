@@ -1,8 +1,8 @@
 use core::cell::Cell;
 
 use crate::{
-    Area, Component, Marker, Msg, Outcome, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band,
-    draw_v_scroll,
+    Area, Component, DataGate, Marker, Msg, Outcome, RenderTarget, Style, V_SCROLL_RESERVE,
+    draw_cursor_band, draw_v_scroll,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -27,6 +27,14 @@ pub trait TableModel {
     fn row_count(&self) -> usize;
     fn col_count(&self) -> usize;
     fn cell(&self, r: usize, c: usize) -> &str;
+
+    /// A number that changes whenever the cells do - see
+    /// [`ListModel::revision`](crate::ListModel::revision), which this mirrors.
+    /// The default is a constant ("I keep no revision"), so a static table
+    /// costs nothing and behaves as before.
+    fn revision(&self) -> u32 {
+        0
+    }
 }
 
 /// Static impl over a slice of `C`-column rows.
@@ -88,8 +96,9 @@ pub struct Table<'a, M: TableModel + ?Sized> {
     marker: Marker,
     page_size: Cell<usize>,
     // Repaint gate: set when the selection, the scroll offset or focus changes,
-    // cleared after a paint. Starts dirty so the first frame always draws.
-    dirty: Cell<bool>,
+    // cleared after a paint. Starts dirty so the first frame always draws, and
+    // carries the model revision painted with it (see `TableModel::revision`).
+    gate: DataGate,
 }
 
 impl<'a, M: TableModel + ?Sized> Table<'a, M> {
@@ -106,7 +115,7 @@ impl<'a, M: TableModel + ?Sized> Table<'a, M> {
             marker: Marker::ARROW,
             // usize::MAX → "everything fits" until the first view() call.
             page_size: Cell::new(usize::MAX),
-            dirty: Cell::new(true),
+            gate: DataGate::new(),
         }
     }
 
@@ -191,7 +200,7 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
                 if self.selected >= self.offset + page {
                     self.offset = self.selected + 1 - page;
                 }
-                self.dirty.set(true);
+                self.gate.mark_dirty();
                 Outcome::Consumed
             }
             Msg::Up if self.selected > 0 => {
@@ -199,7 +208,7 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
                 if self.selected < self.offset {
                     self.offset = self.selected;
                 }
-                self.dirty.set(true);
+                self.gate.mark_dirty();
                 Outcome::Consumed
             }
             // Picking the highlighted row changes no pixel, so the gate stays
@@ -299,24 +308,24 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
 
     fn focus(&mut self) {
         self.focused = true;
-        self.dirty.set(true); // focus decides whether the cursor row bands
+        self.gate.mark_dirty(); // focus decides whether the cursor row bands
     }
 
     fn blur(&mut self) {
         self.focused = false;
-        self.dirty.set(true);
+        self.gate.mark_dirty();
     }
 
     fn dirty(&self) -> bool {
-        self.dirty.get()
+        self.gate.is_dirty(self.model.revision())
     }
 
     fn mark_clean(&self) {
-        self.dirty.set(false);
+        self.gate.mark_clean(self.model.revision());
     }
 
     fn mark_dirty(&self) {
-        self.dirty.set(true);
+        self.gate.mark_dirty();
     }
 }
 
@@ -693,5 +702,49 @@ mod tests {
                 "{msg:?} on an empty table"
             );
         }
+    }
+
+    // ── A model that keeps a revision ───────────────────────────────────────
+
+    /// Readings an application refreshes behind a shared reference.
+    struct Readings {
+        cell: Cell<&'static str>,
+        writes: Cell<u32>,
+    }
+
+    impl TableModel for Readings {
+        fn row_count(&self) -> usize {
+            1
+        }
+        fn col_count(&self) -> usize {
+            2
+        }
+        fn cell(&self, _r: usize, c: usize) -> &str {
+            if c == 0 { "Temp" } else { self.cell.get() }
+        }
+        fn revision(&self) -> u32 {
+            self.writes.get()
+        }
+    }
+
+    #[test]
+    fn a_table_repaints_when_its_model_says_the_cells_moved() {
+        let data = Readings {
+            cell: Cell::new("21"),
+            writes: Cell::new(0),
+        };
+        let table = Table::new(&data, WIDTHS);
+        let area = Area::new(0, 0, 120, 30);
+        let mut t = RecordingTarget::new(128, 64);
+
+        table.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), Some(area));
+        table.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), None, "nothing moved");
+
+        data.cell.set("22");
+        data.writes.set(1);
+        table.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), Some(area), "the new reading");
     }
 }
