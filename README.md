@@ -85,6 +85,18 @@ pixel-only.)
   no hardcoded RGB). Semantic primitives like `draw_check` / `draw_radio` /
   `draw_bar` / `draw_spinner` let each target pixel-draw a real indicator.
 
+- **Drawing of your own.** Beside text and fills there are four free-hand
+  primitives - `set_pixel`, `draw_line`, `draw_rect`, `draw_bitmap` (a 1-bit
+  sprite) - and they take a `Style` too, so a hand-drawn dial or sparkline stays
+  portable across mono, colour and themes, and is assertable in a test. Each has
+  a default implementation, so one Bresenham and one bitmap format serve every
+  target; the pixel targets override them with the native embedded-graphics
+  ones. `Canvas::new(|target, area| ...)` wraps a drawing in an ordinary
+  component (dirty gate, self-clear, zero-area guard) so it needs no type of its
+  own. For what portable primitives cannot say - arcs, images, your own font -
+  `knurl-graphics` hands over the raw `DrawTarget`, clipped to the widget's
+  area.
+
 - **DataProvider models.** Data-heavy widgets borrow a trait, not a fixed slice, so
   an app can back them with its own store (a fixed array, a ring buffer, generated
   rows) with no copying: `ListModel`, `TreeModel`, `TableModel`, `BarChartModel`,
@@ -119,6 +131,7 @@ Inputs: **Checkbox**, **Toggle**, **Counter**, **Slider**, **Picker**, **Radio**
 Indicators: **Spinner**, **ProgressBar**, **LineGauge**, **Scrollbar**,
 **Paginator**.
 Layout: **VStack** / **HStack** (with `Constraint`), **Padded**, **Bordered**.
+Custom drawing: **Canvas** (a closure, drawn through the portable primitives).
 
 ## Demos
 
