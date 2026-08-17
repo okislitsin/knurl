@@ -109,17 +109,80 @@ pixel-only.)
   matches on `router.current()` to render a screen; a focusable "Back" item pops;
   "Back at the root" is the cue to exit.
 
-- **Dirty + partial redraw.** Each `Component` carries a `Cell`-backed dirty flag
-  set in `update()` only when state actually changes. The render loop *gates* on
-  it: a frame with nothing dirty is skipped entirely, and a widget's `view()`
-  self-clears and repaints **only its own area** - there is no global per-frame
-  `clear()`. On a 320×240 panel a full repaint is ~150 KB over SPI, so animating
-  one widget (a `Spinner`, a streaming `Pager`) repaints a few hundred bytes
-  instead of the whole frame. (The win is hardware-measured; the simulator shows
-  the gating.)
+- **Dirty + partial redraw, all the way to the bus.** Each `Component` carries a
+  `Cell`-backed dirty flag set in `update()` only when state actually changes.
+  The render loop *gates* on it: a frame with nothing dirty is skipped entirely,
+  and a widget's `view()` self-clears and repaints **only its own area** - there
+  is no global per-frame `clear()`. The target accumulates what was touched, so
+  `take_dirty_rect()` tells the application which pixels to send - see
+  [Partial redraw on the bus](#partial-redraw-on-the-bus).
 
 - **Desktop simulator (`knurl-sim`).** Mono and colour backends over
   `embedded-graphics-simulator`, sharing one event/render loop, plus the demos.
+
+## Partial redraw on the bus
+
+A repaint that stays in RAM saves nothing. On a 320×240 panel a full frame is
+~150 KB over SPI, and an application that cannot say *which* pixels moved has to
+push all of it - once per encoder click, to move one row.
+
+So the target counts. Every draw call unions its box into a dirty rectangle, and
+the frame ends by asking for it:
+
+```rust,ignore
+app.view(&mut target, AREA);
+
+let Some(r) = target.take_dirty_rect() else {
+    return; // nothing was drawn: the panel already shows the right picture
+};
+```
+
+`None` means a frame that costs **zero bytes**. Otherwise `r` is one rectangle,
+clamped to the panel, in the same pixel coordinates every `Area` is in.
+
+Sending it is the driver's business, not the library's: a framebuffer is
+contiguous and a region is not, so its rows are copied out by stride into a
+scratch buffer. With `lcd_async` on an ST7789:
+
+```rust,ignore
+let mut scratch = [0u8; MAX_REGION_BYTES];
+let row_bytes = r.w as usize * 2;                       // Rgb565
+for row in 0..r.h as usize {
+    let src = ((r.y as usize + row) * WIDTH + r.x as usize) * 2;
+    let dst = row * row_bytes;
+    scratch[dst..dst + row_bytes].copy_from_slice(&frame_buffer[src..src + row_bytes]);
+}
+display.show_raw_data(r.x, r.y, r.w, r.h, &scratch[..r.h as usize * row_bytes]).await?;
+```
+
+What it comes to, measured on the demo application at 320×240 (2 bytes/pixel,
+full frame = 153 600 B):
+
+| what the user did | region | bytes | of a full frame |
+|---|---|---|---|
+| an idle frame, nothing dirty | – | 0 B | 0 % |
+| one step of a value being edited | 312×10 | 6 240 B | 4.1 % |
+| one spinner tick | 320×10 | 6 400 B | 4.2 % |
+| moving inside a form behind tabs | 312×20 | 12 480 B | 8.1 % |
+| moving the cursor in a full-screen list | 312×206 | 128 544 B | 83.7 % |
+| opening another screen | 320×239 | 152 960 B | 99.6 % |
+
+The granularity is the **widget**, because a widget's `view()` clears its own
+area: a form repaints the row that changed, and a list that fills the screen
+repaints the list. Navigation is a full frame by definition, and that is fine -
+it is the click that happens once, not the one that happens every detent.
+
+Two habits are what keep the region honest:
+
+- **never build a widget inside `draw`** - a fresh widget is dirty, so a
+  rebuilt one repaints (and re-dirties its row) forever. Keep it in the struct
+  and change it with its setter. The two numbers that differ most above are the
+  same spinner tick: 4.2 % with the widgets in fields, 83.7 % on a screen that
+  rebuilds its rows every frame;
+- **reach for `clipped(area)`, not `display_mut()`**, when dropping to raw
+  embedded-graphics: what goes through a raw target is invisible to the region,
+  so `clipped` conservatively dirties its area and the unclipped `display_mut`
+  dirties the whole panel.
 
 ## Component catalog
 
