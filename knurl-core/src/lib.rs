@@ -550,6 +550,34 @@ pub trait RenderTarget {
     /// lost. Both `knurl-graphics` targets and the [`mock::RecordingTarget`]
     /// track for real.
     ///
+    /// ## Sending it
+    ///
+    /// A framebuffer is contiguous, and a region is not: pushing one means
+    /// copying its rows out by stride. That slicing belongs to the panel
+    /// driver, not here - `lcd_async`, `mipidsi` and a hand-rolled ST7789 all
+    /// want it slightly differently - so the library reports the region and
+    /// stops there. What it looks like at the other end:
+    ///
+    /// ```ignore
+    /// app.view(&mut target, AREA);
+    ///
+    /// // No region: nothing was drawn, so the panel already shows the picture.
+    /// if let Some(r) = target.take_dirty_rect() {
+    ///     // Copy the region's rows out of the contiguous framebuffer.
+    ///     let mut scratch = [0u8; MAX_REGION_BYTES];
+    ///     let row_bytes = r.w as usize * 2; // Rgb565
+    ///     for row in 0..r.h as usize {
+    ///         let src = ((r.y as usize + row) * WIDTH + r.x as usize) * 2;
+    ///         let dst = row * row_bytes;
+    ///         scratch[dst..dst + row_bytes]
+    ///             .copy_from_slice(&frame_buffer[src..src + row_bytes]);
+    ///     }
+    ///     display
+    ///         .show_raw_data(r.x, r.y, r.w, r.h, &scratch[..r.h as usize * row_bytes])
+    ///         .await?;
+    /// }
+    /// ```
+    ///
     /// ```
     /// # use knurl_core::{Area, BorderStyle, RenderTarget, Style};
     /// # struct Panel;
@@ -928,6 +956,43 @@ pub(crate) fn draw_cursor_band(target: &mut dyn RenderTarget, row: Area, focused
 /// Widgets that don't opt in keep the safe default (`dirty()==true`,
 /// `mark_clean()` a no-op): they self-clear and repaint every frame - correct,
 /// just not optimized.
+///
+/// ## The one mistake that undoes all of it
+///
+/// **Do not build a widget inside `draw`/`view`.** A fresh widget is dirty by
+/// construction - that is what makes the first frame paint - so a widget
+/// rebuilt every frame repaints every frame, dirty gate and all:
+///
+/// ```ignore
+/// fn draw(&mut self, target: &mut dyn RenderTarget, area: Area) {
+///     // Wrong: a new Title every frame, so the title row repaints forever.
+///     Title::new(self.name).view(target, area);
+/// }
+/// ```
+///
+/// Nothing looks wrong on screen, which is why this survives: the picture is
+/// right, the widget is simply painted again and again. What it costs is the
+/// dirty region - that row joins
+/// [`take_dirty_rect`](RenderTarget::take_dirty_rect) on every frame, and an
+/// application pushing the region pays for it over the bus for as long as it
+/// runs. Measured on the demo's 320 × 240 panel: a screen that rebuilds its
+/// rows every frame reports 84% of the panel dirty on an idle tick, where one
+/// holding the same widgets in fields reports 4%.
+///
+/// The fix is to keep the widget and change it when it changes:
+///
+/// ```ignore
+/// struct MyScreen { title: Title<'static>, /* ... */ }
+/// // ...on the event that renames it:
+/// self.title.set_text(name);      // this is what marks it dirty
+/// // ...and in draw:
+/// self.title.view(target, area);  // clean frames draw nothing
+/// ```
+///
+/// Building per frame is not always wrong - it is the documented way to run a
+/// [`Canvas`](crate::Canvas) or a [`BarChart`](crate::BarChart) over live data,
+/// where every frame really does differ. It is wrong for anything that mostly
+/// sits still, which is most chrome.
 pub trait Component {
     /// Called once per event. Components update only their own state, set their
     /// dirty flag when that state actually changes, and report what became of
