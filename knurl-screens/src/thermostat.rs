@@ -35,9 +35,13 @@ use crate::AppEvent;
 const WARM_C: i16 = 26;
 
 /// Formats `v` (0..=99) as `"22C"` into a stack buffer - no allocation, ASCII.
+///
+/// Always three characters wide, blank-padded rather than zero-padded: the slot
+/// is fixed so the value does not shuffle sideways as it crosses ten, and `05C`
+/// is not how anyone writes a temperature.
 fn degrees(buf: &mut [u8; 3], v: i16) -> &str {
     let v = v.clamp(0, 99) as u8;
-    buf[0] = b'0' + v / 10;
+    buf[0] = if v >= 10 { b'0' + v / 10 } else { b' ' };
     buf[1] = b'0' + v % 10;
     buf[2] = b'C';
     core::str::from_utf8(buf).unwrap_or("??C")
@@ -150,16 +154,29 @@ impl Component for Thermostat {
         if self.focused {
             target.fill_band(Area::new(area.x, area.y, area.w, lh), Style::Focus);
         }
+        // Text carries its own background, so anything drawn on the band has to
+        // be drawn *in* the band's style or it punches a hole in it - which is
+        // why a focused row is `Focus` throughout, label included.
+        let label_style = if self.focused {
+            Style::Focus
+        } else {
+            Style::Muted
+        };
         let value_style = match (self.focused, self.setpoint >= WARM_C) {
             (_, true) => Style::Danger,
             (true, false) => Style::Focus,
             (false, false) => Style::Normal,
         };
-        target.draw_text(area.x, area.y, "Set", Style::Muted);
+        target.draw_text(area.x, area.y, "Set", label_style);
         let mut buf = [0u8; 3];
         let text = degrees(&mut buf, self.setpoint);
         let tw = target.text_width(text);
-        target.draw_text(area.x + area.w.saturating_sub(tw), area.y, text, value_style);
+        target.draw_text(
+            area.x + area.w.saturating_sub(tw),
+            area.y,
+            text,
+            value_style,
+        );
 
         // The scale, if the screen gave us a second row for it.
         if area.h < lh * 2 {
@@ -257,13 +274,12 @@ impl Screen for ThermostatScreen {
 
     fn draw(&mut self, target: &mut dyn RenderTarget, area: Area) {
         let lh = target.line_height().max(1);
-        let [caption, dial, hint, foot] = VStack::split(
-            area,
-            &[Length(lh), Length(lh * 2 + 2), Fill(1), Length(lh)],
-        );
+        let [caption, dial, hint, foot] =
+            VStack::split(area, &[Length(lh), Length(lh * 2 + 2), Fill(1), Length(lh)]);
         self.caption.view(target, caption);
         self.dial.view(target, dial);
-        self.hint.view(target, Area::new(hint.x, hint.y, hint.w, lh));
+        self.hint
+            .view(target, Area::new(hint.x, hint.y, hint.w, lh));
         self.back.view(target, foot);
     }
 }

@@ -20,7 +20,7 @@
 //! cargo run -p knurl-sim --example tft
 //! ```
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use knurl::{
     Align, Area, Component,
@@ -38,6 +38,10 @@ use knurl_sim::{ColorSimConfig, ColorSimulator, Frame};
 struct StreamLog {
     lines: RefCell<Vec<String>>,
     cap: usize,
+    /// Appends so far - the model's `revision`. A ring buffer's length is no
+    /// use for that: it stops moving the moment the buffer is full, and lines
+    /// keep arriving.
+    writes: Cell<u32>,
 }
 
 impl StreamLog {
@@ -45,6 +49,7 @@ impl StreamLog {
         Self {
             lines: RefCell::new(Vec::new()),
             cap,
+            writes: Cell::new(0),
         }
     }
 
@@ -55,6 +60,7 @@ impl StreamLog {
             let excess = v.len() - self.cap;
             v.drain(0..excess);
         }
+        self.writes.set(self.writes.get().wrapping_add(1));
     }
 }
 
@@ -69,6 +75,13 @@ impl LinesModel for StreamLog {
         if let Some(s) = self.lines.borrow().get(i) {
             let _ = out.write_str(s);
         }
+    }
+    /// What makes a new line appear without the screen being told. Follow mode
+    /// only helps while there is something to scroll; a log that still fits
+    /// leaves the pager's own state untouched, and the line would never be
+    /// drawn.
+    fn revision(&self) -> u32 {
+        self.writes.get()
     }
 }
 

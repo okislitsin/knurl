@@ -5,6 +5,7 @@ use core::cell::Cell;
 mod basics;
 mod canvas;
 mod chart;
+pub mod custom_widget;
 mod dialog;
 mod dirty;
 mod focus;
@@ -936,6 +937,10 @@ pub(crate) fn draw_cursor_band(target: &mut dyn RenderTarget, row: Area, focused
 }
 
 /// An isolated, composable UI element following the Elm update/view cycle.
+///
+/// Writing one of your own is a page of its own: [`custom_widget`] is the whole
+/// contract - the obligations, what a frame costs, and the traps already walked
+/// into - with a worked example.
 ///
 /// ## Partial redraw
 ///

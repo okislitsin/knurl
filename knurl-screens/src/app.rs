@@ -13,9 +13,8 @@ use crate::{
     editors::EditorsScreen, form::FormScreen, help::HelpScreen, indicators::IndicatorsScreen,
     list::ListScreen, list_form::ListFormScreen, menu::MenuScreen, pager::PagerScreen,
     position::PositionScreen, radio::RadioScreen, status::StatusScreen, tab_forms::TabFormsScreen,
-    table::TableScreen, text::TextScreen, textinput::TextInputScreen,
-    thermostat::ThermostatScreen, toggles::TogglesScreen,
-    tree::TreeScreen, two_forms::TwoFormsScreen,
+    table::TableScreen, text::TextScreen, textinput::TextInputScreen, thermostat::ThermostatScreen,
+    toggles::TogglesScreen, tree::TreeScreen, two_forms::TwoFormsScreen,
 };
 
 /// How deep the demo ever nests: the menu plus one page.

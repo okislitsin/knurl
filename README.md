@@ -102,7 +102,11 @@ pixel-only.)
   rows) with no copying: `ListModel`, `TreeModel`, `TableModel`, `BarChartModel`,
   and `LinesModel` (the `Pager`, with a `write_line` variant for streaming data
   that is never stored whole). A plain `&[&str]` (etc.) still works via blanket
-  impls.
+  impls. A model that changes under the widget can say so - `revision()` returns
+  a number that changes when the content does, and the widget compares it against
+  the one on screen, so a growing log repaints itself with nobody remembering to
+  ask. The default is a constant ("I keep no revision"), so a `const` array pays
+  nothing.
 
 - **Navigation - `Router` / `Nav`.** A fixed-depth, heap-free screen-history stack
   (`Router<Id, DEPTH>`): `push`/`pop`/`replace`, `current()`, `at_root()`. The app
@@ -162,7 +166,8 @@ full frame = 153 600 B):
 |---|---|---|---|
 | an idle frame, nothing dirty | – | 0 B | 0 % |
 | one step of a value being edited | 312×10 | 6 240 B | 4.1 % |
-| one spinner tick | 320×10 | 6 400 B | 4.2 % |
+| one spinner tick | 312×10 | 6 240 B | 4.1 % |
+| a tick moving three indicators five rows apart | 312×50 | 31 200 B | 20.3 % |
 | moving inside a form behind tabs | 312×20 | 12 480 B | 8.1 % |
 | moving the cursor in a full-screen list | 312×206 | 128 544 B | 83.7 % |
 | opening another screen | 320×239 | 152 960 B | 99.6 % |
@@ -170,19 +175,46 @@ full frame = 153 600 B):
 The granularity is the **widget**, because a widget's `view()` clears its own
 area: a form repaints the row that changed, and a list that fills the screen
 repaints the list. Navigation is a full frame by definition, and that is fine -
-it is the click that happens once, not the one that happens every detent.
+it is the click that happens once, not the one that happens every detent. And
+the region is **one rectangle**, not a list, so three small widgets far apart
+cost the box that contains them - a reason to keep what animates, together.
 
 Two habits are what keep the region honest:
 
 - **never build a widget inside `draw`** - a fresh widget is dirty, so a
   rebuilt one repaints (and re-dirties its row) forever. Keep it in the struct
-  and change it with its setter. The two numbers that differ most above are the
-  same spinner tick: 4.2 % with the widgets in fields, 83.7 % on a screen that
-  rebuilds its rows every frame;
+  and change it with its setter. Measured on the demo's own Indicators screen,
+  which used to get this wrong: the same spinner tick is 4.1 % with the widgets
+  in fields and was 83.7 % when the screen rebuilt its rows every frame;
 - **reach for `clipped(area)`, not `display_mut()`**, when dropping to raw
   embedded-graphics: what goes through a raw target is invisible to the region,
   so `clipped` conservatively dirties its area and the unclipped `display_mut`
   dirties the whole panel.
+
+## Writing your own widget
+
+The catalog covers what most panels need, and then it does not cover the one
+thing yours does. The full contract - what you bring, what you get free, and
+what a skipped clause costs - is one rustdoc page:
+**[`knurl::custom_widget`](knurl-core/src/custom_widget.rs)**
+(`cargo doc --open`, then *custom_widget*). The short version:
+
+- **a picture** - a dial, a sparkline, a logo - is a `Canvas`: give it a closure
+  and it brings the dirty gate, the self-clear and the zero-area guard;
+- **something the user drives** is a `Component` of your own. Four obligations:
+  a `Cell<bool>` set in `update` **only when the state really changed**, a guard
+  for an area too small to draw into, an `Outcome` for every event (`Ignored` at
+  the edges is what lets the cursor *leave* your widget), and `Style` instead of
+  colour. It becomes a focus zone with nothing declared - `FocusZone` has a
+  blanket impl for every `Component`;
+- **pixels the portable primitives cannot express** - arcs, images, your own
+  font - go through `knurl-graphics`' `clipped(area)` escape hatch, which costs
+  you the theme, monochrome, and testability.
+
+A worked example lives in the demo, written against nothing but the `knurl`
+facade, exactly as firmware would be: [`thermostat.rs`](knurl-screens/src/thermostat.rs)
+is a setpoint dial with tests for every clause in
+[`tests/thermostat.rs`](knurl-screens/tests/thermostat.rs).
 
 ## Component catalog
 
