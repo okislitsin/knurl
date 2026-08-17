@@ -1,47 +1,73 @@
 //! Text styles, drawn by hand and scrolled by hand - the screen with no widget
 //! to put on the chain.
 //!
-//! Its rows are transient (`Label`s and `Title`s built per frame), so what the
-//! encoder actually drives is an offset. That offset joins the chain as a
-//! [`ScrollZone`], and everything else follows: the window scrolls while it
-//! can, and at the bottom the same `Down` moves the cursor onto `< Back`.
+//! What the encoder actually drives here is an offset. That offset joins the
+//! chain as a [`ScrollZone`](knurl::ScrollZone) inside [`Stack`], and everything
+//! else follows: the window scrolls while it can, and at the bottom the same
+//! `Down` moves the cursor onto `< Back`.
+//!
+//! The rows are **fields**, not values built inside `draw`. Nine static rows
+//! rebuilt per frame look identical on the panel and report the whole window
+//! dirty forever; kept in an array they paint once and the screen goes quiet.
 
 use knurl::{
     Align, Area, Button, Component,
     Constraint::{Fill, Length},
-    FocusChain, FocusZone, Label, Msg, Outcome, RenderTarget, Screen, ScreenState, ScrollZone,
-    Separator, Style, Title, VStack,
+    FocusChain, FocusZone, Label, Msg, Outcome, RenderTarget, Screen, ScreenState, Separator,
+    Style, Title, VStack,
 };
 
-use crate::{AppEvent, stack};
+use crate::{AppEvent, stack::Stack};
 
-/// One row of the stack. A row is drawn from scratch every frame - which is
-/// exactly why the screen clears the window itself (see [`stack::rows`]).
+/// One row of the stack. Rows differ in type, so they share an enum - which is
+/// what keeping them in fields costs, and it is cheaper than the repaint.
 enum Row {
-    Text(&'static str, Style),
-    Centered(&'static str),
-    Right(&'static str),
-    Rule,
+    Text(Label<'static>),
+    Heading(Title<'static>),
+    Rule(Separator),
     Gap,
 }
 
-const ROWS: &[Row] = &[
-    Row::Text("Normal text", Style::Normal),
-    Row::Text("Accent text", Style::Accent),
-    Row::Text("Muted text", Style::Muted),
-    Row::Text("Danger text", Style::Danger),
-    Row::Rule,
-    Row::Centered("Centered title"),
-    Row::Right("Right title"),
-    Row::Gap,
-    Row::Text("(spacer above)", Style::Muted),
-];
+impl Row {
+    fn view(&self, target: &mut dyn RenderTarget, area: Area) {
+        match self {
+            Row::Text(w) => w.view(target, area),
+            Row::Heading(w) => w.view(target, area),
+            Row::Rule(w) => w.view(target, area),
+            Row::Gap => {}
+        }
+    }
+
+    fn mark_dirty(&self) {
+        match self {
+            Row::Text(w) => w.mark_dirty(),
+            Row::Heading(w) => w.mark_dirty(),
+            Row::Rule(w) => w.mark_dirty(),
+            Row::Gap => {}
+        }
+    }
+}
+
+const ROW_COUNT: usize = 9;
+
+fn rows() -> [Row; ROW_COUNT] {
+    [
+        Row::Text(Label::new("Normal text")),
+        Row::Text(Label::new("Accent text").with_style(Style::Accent)),
+        Row::Text(Label::new("Muted text").with_style(Style::Muted)),
+        Row::Text(Label::new("Danger text").with_style(Style::Danger)),
+        Row::Rule(Separator::new()),
+        Row::Heading(Title::new("Centered title").with_align(Align::Center)),
+        Row::Heading(Title::new("Right title").with_align(Align::Right)),
+        Row::Gap,
+        Row::Text(Label::new("(spacer above)").with_style(Style::Muted)),
+    ]
+}
 
 pub struct TextScreen {
     state: ScreenState,
-    scroll: usize,
-    /// Rows that fitted last frame - the ceiling the scroll zone stops at.
-    visible: usize,
+    window: Stack,
+    rows: [Row; ROW_COUNT],
     back: Button<'static>,
 }
 
@@ -49,8 +75,8 @@ impl TextScreen {
     pub fn new() -> Self {
         Self {
             state: ScreenState::new(),
-            scroll: 0,
-            visible: 1,
+            window: Stack::new(),
+            rows: rows(),
             back: Button::new("< Back"),
         }
     }
@@ -71,13 +97,10 @@ impl Screen for TextScreen {
 
     fn zones(&mut self, f: &mut dyn FnMut(&mut FocusChain, &mut [&mut dyn FocusZone])) {
         let Self {
-            state,
-            scroll,
-            visible,
-            back,
+            state, window, back, ..
         } = self;
-        let mut rows = ScrollZone::new(scroll, ROWS.len().saturating_sub(*visible));
-        f(state.chain(), &mut [&mut rows, back]);
+        let mut scroll = window.zone(ROW_COUNT);
+        f(state.chain(), &mut [&mut scroll, back]);
     }
 
     fn on_outcome(&mut self, _msg: &Msg, _outcome: Outcome) -> Option<AppEvent> {
@@ -85,25 +108,24 @@ impl Screen for TextScreen {
     }
 
     fn on_enter(&mut self) {
-        self.scroll = 0;
+        // Rows inside a hand-drawn window are not zones, so the cascade that
+        // repaints a screen on entry does not reach them - the window is told.
+        self.window.mark_dirty();
     }
 
     fn draw(&mut self, target: &mut dyn RenderTarget, area: Area) {
         let lh = target.line_height().max(1);
-        let [window, foot] = VStack::split(area, &[Fill(1), Length(lh)]);
-        self.visible = stack::rows(
-            target,
-            window,
-            self.scroll,
-            ROWS.len(),
-            |t, i, row| match &ROWS[i] {
-                Row::Text(s, style) => Label::new(s).with_style(*style).view(t, row),
-                Row::Centered(s) => Title::new(s).with_align(Align::Center).view(t, row),
-                Row::Right(s) => Title::new(s).with_align(Align::Right).view(t, row),
-                Row::Rule => Separator::new().view(t, row),
-                Row::Gap => {}
-            },
-        );
-        self.back.view(target, foot);
+        let [body, foot] = VStack::split(area, &[Fill(1), Length(lh)]);
+        let Self {
+            window, rows, back, ..
+        } = self;
+
+        window.rows(target, body, ROW_COUNT, |t, i, area, shifted| {
+            if shifted {
+                rows[i].mark_dirty();
+            }
+            rows[i].view(t, area);
+        });
+        back.view(target, foot);
     }
 }
