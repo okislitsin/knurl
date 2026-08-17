@@ -1,8 +1,8 @@
 use core::cell::Cell;
 
 use crate::{
-    Area, Component, Marker, Msg, Outcome, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band,
-    draw_v_scroll,
+    Area, Component, DataGate, Marker, Msg, Outcome, RenderTarget, Style, V_SCROLL_RESERVE,
+    draw_cursor_band, draw_v_scroll,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -54,6 +54,14 @@ pub trait TreeModel {
     fn get_item(&self, i: usize) -> &str;
     /// Nesting level of node `i` (0 for roots).
     fn depth(&self, i: usize) -> u8;
+
+    /// A number that changes whenever the nodes do - see
+    /// [`ListModel::revision`](crate::ListModel::revision), which this mirrors.
+    /// The default is a constant ("I keep no revision"), so a static tree costs
+    /// nothing and behaves as before.
+    fn revision(&self) -> u32 {
+        0
+    }
 }
 
 /// Backwards-compatible static impl over a slice of [`TreeItem`]s.
@@ -119,8 +127,9 @@ pub struct Tree<'a, M: TreeModel + ?Sized = [TreeItem<'a>]> {
     marker: Marker,
     page_size: Cell<usize>,
     // Repaint gate: set when the selection, the scroll offset, the expansion
-    // mask or focus changes. Starts dirty so the first frame always draws.
-    dirty: Cell<bool>,
+    // mask or focus changes. Starts dirty so the first frame always draws, and
+    // carries the model revision painted with it (see `TreeModel::revision`).
+    gate: DataGate,
 }
 
 impl<'a, M: TreeModel + ?Sized> Tree<'a, M> {
@@ -135,7 +144,7 @@ impl<'a, M: TreeModel + ?Sized> Tree<'a, M> {
             marker: Marker::ARROW,
             // usize::MAX → "everything fits" until the first view() call.
             page_size: Cell::new(usize::MAX),
-            dirty: Cell::new(true),
+            gate: DataGate::new(),
         }
     }
 
@@ -344,7 +353,7 @@ impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
             _ => Outcome::Ignored,
         };
         if (self.selected, self.offset, self.expanded) != before {
-            self.dirty.set(true);
+            self.gate.mark_dirty();
         }
         outcome
     }
@@ -441,24 +450,24 @@ impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
 
     fn focus(&mut self) {
         self.focused = true;
-        self.dirty.set(true); // focus decides whether the cursor row bands
+        self.gate.mark_dirty(); // focus decides whether the cursor row bands
     }
 
     fn blur(&mut self) {
         self.focused = false;
-        self.dirty.set(true);
+        self.gate.mark_dirty();
     }
 
     fn dirty(&self) -> bool {
-        self.dirty.get()
+        self.gate.is_dirty(self.model.revision())
     }
 
     fn mark_clean(&self) {
-        self.dirty.set(false);
+        self.gate.mark_clean(self.model.revision());
     }
 
     fn mark_dirty(&self) {
-        self.dirty.set(true);
+        self.gate.mark_dirty();
     }
 }
 
@@ -884,5 +893,55 @@ mod tests {
                 "{msg:?} on an empty tree"
             );
         }
+    }
+
+    // ── A model that keeps a revision ───────────────────────────────────────
+
+    /// A device list that gains nodes as things are discovered.
+    struct Discovered {
+        nodes: [TreeItem<'static>; 3],
+        len: Cell<usize>,
+        writes: Cell<u32>,
+    }
+
+    impl TreeModel for Discovered {
+        fn item_count(&self) -> usize {
+            self.len.get()
+        }
+        fn get_item(&self, i: usize) -> &str {
+            self.nodes[i].label
+        }
+        fn depth(&self, i: usize) -> u8 {
+            self.nodes[i].depth
+        }
+        fn revision(&self) -> u32 {
+            self.writes.get()
+        }
+    }
+
+    #[test]
+    fn a_tree_repaints_when_its_model_says_the_nodes_moved() {
+        let found = Discovered {
+            nodes: [
+                TreeItem::new("bus", 0),
+                TreeItem::new("sensor", 1),
+                TreeItem::new("relay", 1),
+            ],
+            len: Cell::new(1),
+            writes: Cell::new(0),
+        };
+        let tree = Tree::new(&found);
+        let area = Area::new(0, 0, 120, 30);
+        let mut t = RecordingTarget::new(128, 64);
+
+        tree.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), Some(area));
+        tree.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), None, "nothing moved");
+
+        found.len.set(3);
+        found.writes.set(1);
+        tree.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), Some(area), "the nodes that arrived");
     }
 }

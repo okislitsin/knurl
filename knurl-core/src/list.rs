@@ -1,8 +1,8 @@
 use core::cell::Cell;
 
 use crate::{
-    Area, Component, Marker, Msg, Outcome, RenderTarget, Style, V_SCROLL_RESERVE, draw_cursor_band,
-    draw_v_scroll,
+    Area, Component, DataGate, Marker, Msg, Outcome, RenderTarget, Style, V_SCROLL_RESERVE,
+    draw_cursor_band, draw_v_scroll,
 };
 
 // ── ListModel (data provider) ──────────────────────────────────────────────────
@@ -21,6 +21,46 @@ pub trait ListModel {
     fn item_count(&self) -> usize;
     /// The text of item `i`. Callers only index `0..item_count()`.
     fn get_item(&self, i: usize) -> &str;
+
+    /// A number that changes whenever the content does - how a [`List`] notices
+    /// that its data moved without anyone telling it.
+    ///
+    /// This is the one question a widget can ask a model it does not own. The
+    /// default is a **constant**, which says "I keep no revision": the
+    /// comparison never fires, and the list repaints on its own state and when
+    /// its owner calls [`mark_dirty`](Component::mark_dirty) - exactly the
+    /// behaviour every model has today. A model that can spare one `u32` gets
+    /// self-service instead, and nobody has to remember anything:
+    ///
+    /// ```
+    /// # use core::cell::Cell;
+    /// # use knurl_core::ListModel;
+    /// struct Log { lines: [&'static str; 4], len: Cell<usize>, writes: Cell<u32> }
+    ///
+    /// impl Log {
+    ///     fn push(&self, _line: &str) {
+    ///         // ...store it, and say so:
+    ///         self.writes.set(self.writes.get() + 1);
+    ///     }
+    /// }
+    ///
+    /// impl ListModel for Log {
+    ///     fn item_count(&self) -> usize { self.len.get() }
+    ///     fn get_item(&self, i: usize) -> &str { self.lines[i] }
+    ///     fn revision(&self) -> u32 { self.writes.get() }
+    /// }
+    /// ```
+    ///
+    /// Only *different* counts, never *greater*: a model with nothing to count
+    /// may hand back a cheap fingerprint of its content instead, and repeating
+    /// an old value is fine. Wrapping a counter is fine too - it takes four
+    /// billion writes to land back on the number that is on screen.
+    ///
+    /// See [`DataGate`](crate::DataGate), which is where a widget keeps the
+    /// answer, and the [custom widget guide](crate::custom_widget).
+    fn revision(&self) -> u32 {
+        0
+    }
 }
 
 /// Backwards-compatible static impl: a `&[&str]` is the simplest model, so
@@ -96,8 +136,10 @@ pub struct List<'a, M: ListModel + ?Sized = [&'a str]> {
     // following update(&mut self) can scroll without knowing render dimensions.
     page_size: Cell<usize>,
     // Repaint gate: set when selection/scroll/focus changes, cleared after a
-    // paint. Starts dirty so the first frame always draws.
-    dirty: Cell<bool>,
+    // paint. Starts dirty so the first frame always draws. It also carries the
+    // model revision that was painted, so a model that keeps one moves the list
+    // without being told (see `ListModel::revision`).
+    gate: DataGate,
 }
 
 impl<'a, M: ListModel + ?Sized> List<'a, M> {
@@ -110,7 +152,7 @@ impl<'a, M: ListModel + ?Sized> List<'a, M> {
             marker: Marker::ARROW,
             // usize::MAX → "everything fits" until the first view() call.
             page_size: Cell::new(usize::MAX),
-            dirty: Cell::new(true),
+            gate: DataGate::new(),
         }
     }
 
@@ -155,7 +197,7 @@ impl<'a, M: ListModel + ?Sized> Component for List<'a, M> {
                 if self.selected >= self.offset + page {
                     self.offset = self.selected + 1 - page;
                 }
-                self.dirty.set(true);
+                self.gate.mark_dirty();
                 Outcome::Consumed
             }
             Msg::Up if self.selected > 0 => {
@@ -164,7 +206,7 @@ impl<'a, M: ListModel + ?Sized> Component for List<'a, M> {
                 if self.selected < self.offset {
                     self.offset = self.selected;
                 }
-                self.dirty.set(true);
+                self.gate.mark_dirty();
                 Outcome::Consumed
             }
             // Picking the highlighted item changes no pixel - the gate stays
@@ -242,24 +284,24 @@ impl<'a, M: ListModel + ?Sized> Component for List<'a, M> {
 
     fn focus(&mut self) {
         self.focused = true;
-        self.dirty.set(true);
+        self.gate.mark_dirty();
     }
 
     fn blur(&mut self) {
         self.focused = false;
-        self.dirty.set(true);
+        self.gate.mark_dirty();
     }
 
     fn dirty(&self) -> bool {
-        self.dirty.get()
+        self.gate.is_dirty(self.model.revision())
     }
 
     fn mark_clean(&self) {
-        self.dirty.set(false);
+        self.gate.mark_clean(self.model.revision());
     }
 
     fn mark_dirty(&self) {
-        self.dirty.set(true);
+        self.gate.mark_dirty();
     }
 }
 
@@ -749,5 +791,85 @@ mod tests {
                 "{msg:?} on an empty list"
             );
         }
+    }
+
+    // ── A model that keeps a revision ───────────────────────────────────────
+
+    /// A store the application writes to behind a shared reference - the only
+    /// shape in which a list's data can change under it.
+    struct Feed {
+        items: [&'static str; 3],
+        len: Cell<usize>,
+        writes: Cell<u32>,
+    }
+
+    impl Feed {
+        fn new(len: usize) -> Self {
+            Self {
+                items: ["Alpha", "Beta", "Gamma"],
+                len: Cell::new(len),
+                writes: Cell::new(0),
+            }
+        }
+        /// What an application does: change the data, and say so.
+        fn grow(&self) {
+            self.len.set(self.len.get() + 1);
+            self.writes.set(self.writes.get() + 1);
+        }
+    }
+
+    impl ListModel for Feed {
+        fn item_count(&self) -> usize {
+            self.len.get()
+        }
+        fn get_item(&self, i: usize) -> &str {
+            self.items[i]
+        }
+        fn revision(&self) -> u32 {
+            self.writes.get()
+        }
+    }
+
+    /// The point of the revision: nobody calls anything on the widget, and the
+    /// new row is on the panel on the next frame.
+    #[test]
+    fn a_list_repaints_when_its_model_says_the_data_moved() {
+        let feed = Feed::new(1);
+        let list = List::new(&feed);
+        let area = Area::new(0, 0, 120, 30);
+        let mut t = RecordingTarget::new(128, 64);
+
+        list.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), Some(area), "the first paint");
+        list.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), None, "nothing moved, nothing to send");
+
+        feed.grow();
+        list.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), Some(area), "the new row was drawn");
+        assert_eq!(
+            texts(&t).filter(|(_, _, s, _)| *s == "Beta").count(),
+            1,
+            "…and it is the row that arrived"
+        );
+
+        list.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), None, "and it settles again");
+    }
+
+    /// A model with no revision of its own keeps exactly the behaviour it had:
+    /// the list gates on its own state, and its owner is what says otherwise.
+    #[test]
+    fn a_model_without_a_revision_costs_nothing_and_changes_nothing() {
+        let list = List::new(ITEMS);
+        let area = Area::new(0, 0, 120, 30);
+        let mut t = RecordingTarget::new(128, 64);
+        list.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), Some(area));
+        list.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), None);
+        list.mark_dirty();
+        list.view(&mut t, area);
+        assert_eq!(t.take_dirty_rect(), Some(area));
     }
 }
