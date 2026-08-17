@@ -6,6 +6,7 @@ mod basics;
 mod canvas;
 mod chart;
 mod dialog;
+mod dirty;
 mod focus;
 mod form;
 mod help;
@@ -27,6 +28,7 @@ pub use basics::{Separator, Spacer, Title};
 pub use canvas::Canvas;
 pub use chart::{BarChart, BarChartModel};
 pub use dialog::Dialog;
+pub use dirty::DirtyRect;
 pub use focus::{Entry, FocusChain, FocusZone, FormZone, NoZone, ScrollZone};
 pub use form::{Form, FormField};
 pub use help::Help;
@@ -105,6 +107,29 @@ impl Area {
     /// hairline border (shorthand for `inner_by(BORDER_PX)`).
     pub fn inner(&self) -> Option<Self> {
         self.inner_by(Self::BORDER_PX)
+    }
+
+    /// The overlap of two areas, or `None` when they do not overlap (or either
+    /// is empty).
+    ///
+    /// This is how a rectangle gets clamped to the panel - see [`DirtyRect`],
+    /// whose whole job is to hand back a region that a driver can push without
+    /// checking it first.
+    pub fn intersect(&self, other: Area) -> Option<Self> {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        // In u32: an area's right edge is x + w, which a u16 pair can overflow.
+        let right = (self.x as u32 + self.w as u32).min(other.x as u32 + other.w as u32);
+        let bottom = (self.y as u32 + self.h as u32).min(other.y as u32 + other.h as u32);
+        if right <= x as u32 || bottom <= y as u32 {
+            return None;
+        }
+        Some(Self::new(
+            x,
+            y,
+            (right - x as u32) as u16,
+            (bottom - y as u32) as u16,
+        ))
     }
 }
 
@@ -493,6 +518,60 @@ pub trait RenderTarget {
     fn text_width(&self, s: &str) -> u16 {
         self.char_width().saturating_mul(s.chars().count() as u16)
     }
+
+    // ── Partial redraw ──────────────────────────────────────────────────────
+
+    /// The bounding box of everything drawn since this was last called, and
+    /// **resets** it - the region an application has to push to the panel, and
+    /// nothing more.
+    ///
+    /// This is where partial redraw stops being a framebuffer optimisation and
+    /// starts saving bus time. Widgets already repaint only themselves, but a
+    /// caller with no idea *where* they did it has to send the whole panel:
+    /// 150 KB over SPI for a 320 × 240 at 16bpp, per encoder click, to move one
+    /// row. A target sees every draw call, so it is the one thing in the system
+    /// that can answer the question - it unions each call into a [`DirtyRect`]
+    /// as it goes.
+    ///
+    /// - `None` - **nothing was drawn**: every widget was clean, so the panel
+    ///   already shows the right picture and the frame costs zero bytes.
+    /// - `Some(area)` - push exactly `area` (see the [`DirtyRect`] docs for why
+    ///   it is one box rather than a list). The rectangle is in this target's
+    ///   own coordinates - the same space [`Area`] is always in - and is
+    ///   clamped to the panel, so it can be handed to a driver as is.
+    ///
+    /// ## The default is the whole panel, on purpose
+    ///
+    /// A target that does not track anything reports **everything dirty**. It
+    /// is the only safe answer: `None` would read as "nothing changed" and an
+    /// application would push nothing at all, leaving the panel frozen with no
+    /// symptom to debug. Reporting the panel costs a target that never opted in
+    /// exactly what it costs today - a full frame - and nothing is silently
+    /// lost. Both `knurl-graphics` targets and the [`mock::RecordingTarget`]
+    /// track for real.
+    ///
+    /// ```
+    /// # use knurl_core::{Area, BorderStyle, RenderTarget, Style};
+    /// # struct Panel;
+    /// # impl RenderTarget for Panel {
+    /// #     fn width(&self) -> u16 { 320 }
+    /// #     fn height(&self) -> u16 { 240 }
+    /// #     fn is_graphical(&self) -> bool { true }
+    /// #     fn line_height(&self) -> u16 { 20 }
+    /// #     fn char_width(&self) -> u16 { 10 }
+    /// #     fn draw_text(&mut self, _x: u16, _y: u16, _t: &str, _s: Style) {}
+    /// #     fn draw_box(&mut self, _a: Area, _b: BorderStyle) {}
+    /// #     fn clear(&mut self, _a: Area) {}
+    /// #     fn fill_rect(&mut self, _a: Area, _s: Style) {}
+    /// # }
+    /// // A target that tracks nothing reports the panel - never "nothing".
+    /// assert_eq!(Panel.take_dirty_rect(), Some(Area::new(0, 0, 320, 240)));
+    /// ```
+    fn take_dirty_rect(&mut self) -> Option<Area> {
+        Some(Area::new(0, 0, self.width(), self.height()))
+    }
+
+    // ── Drawing ─────────────────────────────────────────────────────────────
 
     /// Renders `text` with its top-left at pixel `(x, y)`. Clipping at screen
     /// edges is the implementation's responsibility.
@@ -1119,12 +1198,17 @@ pub mod mock {
     }
 
     /// Records every draw call and exposes fixed font metrics.
+    ///
+    /// It also accumulates the [`DirtyRect`] the pixel targets do, over the
+    /// same rules - so the region a frame would cost on hardware is a host test
+    /// away, and the two implementations can be checked against each other.
     pub struct RecordingTarget {
         width: u16,
         height: u16,
         char_w: u16,
         line_h: u16,
         ops: Vec<Op>,
+        dirty: DirtyRect,
     }
 
     impl RecordingTarget {
@@ -1137,6 +1221,7 @@ pub mod mock {
                 char_w: 6,
                 line_h: 10,
                 ops: Vec::new(),
+                dirty: DirtyRect::new(width, height),
             }
         }
 
@@ -1150,6 +1235,20 @@ pub mod mock {
         /// All recorded ops, in draw order.
         pub fn ops(&self) -> &[Op] {
             &self.ops
+        }
+
+        /// The region every recorded op falls inside, without taking it -
+        /// [`take_dirty_rect`](RenderTarget::take_dirty_rect) without the reset.
+        pub fn dirty_rect(&self) -> Option<Area> {
+            self.dirty.peek()
+        }
+
+        /// The pixel box `text` occupies at `(x, y)`, by the font metrics: the
+        /// monospace advance times its characters, one line tall. Text is the
+        /// one primitive whose extent is not in its arguments, and guessing it
+        /// as "the rest of the row" is what inflates a region for free.
+        fn text_box(&self, x: u16, y: u16, text: &str) -> Area {
+            Area::new(x, y, self.text_width(text), self.line_h)
         }
 
         /// The first recorded text op, if any (`(x, y, text, style)`).
@@ -1182,7 +1281,12 @@ pub mod mock {
             self.char_w
         }
 
+        fn take_dirty_rect(&mut self) -> Option<Area> {
+            self.dirty.take()
+        }
+
         fn draw_text(&mut self, x: u16, y: u16, text: &str, style: Style) {
+            self.dirty.add(self.text_box(x, y, text));
             self.ops.push(Op::Text {
                 x,
                 y,
@@ -1192,26 +1296,31 @@ pub mod mock {
         }
 
         fn draw_box(&mut self, area: Area, border: BorderStyle) {
+            self.dirty.add(area);
             self.ops.push(Op::Box { area, border });
         }
 
         fn clear(&mut self, area: Area) {
+            self.dirty.add(area);
             self.ops.push(Op::Clear { area });
         }
 
         fn fill_rect(&mut self, area: Area, style: Style) {
+            self.dirty.add(area);
             self.ops.push(Op::Fill { area, style });
         }
 
         // Recorded verbatim (the trait default draws nothing) so tests can
         // assert on the band itself: where it starts, how wide it runs.
         fn fill_band(&mut self, area: Area, style: Style) {
+            self.dirty.add(area);
             self.ops.push(Op::Band { area, style });
         }
 
         // Recorded verbatim (rather than via the fill_rect default) so tests can
         // assert on the semantic bar call and its fraction.
         fn draw_bar(&mut self, area: Area, fill_permille: u16, style: Style) {
+            self.dirty.add(area);
             self.ops.push(Op::Bar {
                 area,
                 fill_permille,
@@ -1224,10 +1333,15 @@ pub mod mock {
         // to pin, and the shared defaults are checked on their own against a
         // pixel grid instead.
         fn set_pixel(&mut self, x: u16, y: u16, style: Style) {
+            self.dirty.add(Area::new(x, y, 1, 1));
             self.ops.push(Op::Pixel { x, y, style });
         }
 
         fn draw_line(&mut self, x0: u16, y0: u16, x1: u16, y1: u16, style: Style) {
+            // Both ends are inclusive, so the box is one pixel past the max.
+            let (x, y) = (x0.min(x1), y0.min(y1));
+            let (w, h) = (x0.abs_diff(x1) + 1, y0.abs_diff(y1) + 1);
+            self.dirty.add(Area::new(x, y, w, h));
             self.ops.push(Op::Line {
                 x0,
                 y0,
@@ -1238,10 +1352,12 @@ pub mod mock {
         }
 
         fn draw_rect(&mut self, area: Area, style: Style) {
+            self.dirty.add(area);
             self.ops.push(Op::Rect { area, style });
         }
 
         fn draw_bitmap(&mut self, area: Area, bits: &[u8], style: Style) {
+            self.dirty.add(area);
             self.ops.push(Op::Bitmap {
                 area,
                 bits: bits.to_vec(),
@@ -1351,6 +1467,79 @@ mod tests {
     fn marker_width_counts_characters_not_bytes() {
         let m = Marker::new("\u{25b6}", " ");
         assert_eq!(m.width(), 1);
+    }
+
+    // ── The dirty region ──────────────────────────────────────────────────────
+
+    /// A frame in which no widget was dirty draws nothing, so there is nothing
+    /// to push - and the application sends zero bytes rather than a full panel.
+    #[test]
+    fn a_frame_that_draws_nothing_has_no_region() {
+        let mut t = RecordingTarget::new(320, 240);
+        let label = Label::new("Idle");
+        label.view(&mut t, Area::new(0, 0, 320, 20)); // first frame: dirty
+        assert!(t.take_dirty_rect().is_some());
+
+        label.view(&mut t, Area::new(0, 0, 320, 20)); // clean now
+        assert!(t.ops().len() == 2, "a clean widget draws nothing more");
+        assert_eq!(t.take_dirty_rect(), None);
+    }
+
+    /// `take` means "sent": the region does not survive being read.
+    #[test]
+    fn taking_the_region_resets_it() {
+        let mut t = RecordingTarget::new(320, 240);
+        t.fill_rect(Area::new(4, 8, 20, 10), Style::Focus);
+        assert_eq!(t.take_dirty_rect(), Some(Area::new(4, 8, 20, 10)));
+        assert_eq!(t.take_dirty_rect(), None);
+    }
+
+    /// The region is the union of the calls, not a per-call list.
+    #[test]
+    fn the_region_is_the_union_of_what_was_drawn() {
+        let mut t = RecordingTarget::new(320, 240);
+        t.clear(Area::new(0, 30, 100, 10));
+        t.draw_text(0, 30, "Hi", Style::Normal);
+        t.fill_rect(Area::new(90, 200, 4, 4), Style::Muted);
+        assert_eq!(t.take_dirty_rect(), Some(Area::new(0, 30, 100, 174)));
+    }
+
+    /// Text is measured by the font metrics, not by the row it sits on: two
+    /// characters are two characters wide, on a 320px panel as on a 128px one.
+    #[test]
+    fn text_dirties_its_glyphs_not_the_whole_row() {
+        let mut t = RecordingTarget::new(320, 240);
+        t.draw_text(30, 40, "Hi", Style::Normal);
+        // char_width 6 × 2 chars, one line_height tall.
+        assert_eq!(t.take_dirty_rect(), Some(Area::new(30, 40, 12, 10)));
+    }
+
+    /// Drawing off the panel dirties only the part that landed on it - the
+    /// region can be handed to a driver without a bounds check.
+    #[test]
+    fn the_region_never_leaves_the_panel() {
+        let mut t = RecordingTarget::new(128, 64);
+        t.fill_rect(Area::new(120, 60, 40, 40), Style::Normal);
+        assert_eq!(t.take_dirty_rect(), Some(Area::new(120, 60, 8, 4)));
+    }
+
+    /// A widget that moved dirties **its own area**, not the panel: the rows
+    /// above and below it are still whatever was drawn there last frame. This
+    /// is the whole point - the granularity is the widget, because a widget's
+    /// `view` clears its own area and nothing else.
+    #[test]
+    fn a_widget_dirties_its_own_area_only() {
+        let mut t = RecordingTarget::new(320, 240);
+        let mut list = List::new(&["Alpha", "Beta", "Gamma"]);
+        let body = Area::new(0, 40, 320, 60);
+        list.view(&mut t, body);
+        let _ = t.take_dirty_rect();
+
+        let _ = list.update(&Msg::Down);
+        list.view(&mut t, body);
+        let region = t.take_dirty_rect().unwrap();
+        assert_eq!(region, body);
+        assert!(region.h < 240, "the title and status rows were not touched");
     }
 
     // ── RenderTarget metrics ──────────────────────────────────────────────────

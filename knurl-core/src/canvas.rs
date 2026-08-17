@@ -182,6 +182,22 @@ mod tests {
         }
     }
 
+    /// Free-hand drawing needs no dirty-region bookkeeping of its own: a canvas
+    /// paints through the ordinary primitives, so the target counts it like
+    /// anything else - and a clean one costs nothing to send.
+    #[test]
+    fn a_canvas_is_in_the_region_by_the_primitives_it_draws() {
+        let c = dial();
+        let area = Area::new(2, 3, 20, 10);
+        let mut t = RecordingTarget::new(64, 32);
+        c.view(&mut t, area);
+        // The self-clear covers the area; the diagonal line stays inside it.
+        assert_eq!(t.take_dirty_rect(), Some(area));
+
+        c.view(&mut t, area); // clean now
+        assert_eq!(t.take_dirty_rect(), None);
+    }
+
     #[test]
     fn zero_area_draws_nothing() {
         let c = dial();
