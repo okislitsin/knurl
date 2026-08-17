@@ -14,10 +14,10 @@ publish = false
 # Only the facade, exactly what firmware depends on: these files are meant to
 # be copied into a device project unchanged, so they may not name knurl-core,
 # knurl-sim or anything else the demo host provides.
-knurl = { path = "../knurl", version = "0.2.0" }
+knurl = { path = "../knurl", version = "0.2.1" }
 
 [dev-dependencies]
 # Test-only: the recording target lives behind knurl-core's `mock` feature and
 # has no place in a screen file. Tests are in tests/, not in src/, for the
 # same reason.
-knurl-core = { path = "../knurl-core", version = "0.3.0", features = ["mock"] }
+knurl-core = { path = "../knurl-core", version = "0.4.0", features = ["mock"] }
