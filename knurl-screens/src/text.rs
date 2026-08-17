@@ -97,7 +97,10 @@ impl Screen for TextScreen {
 
     fn zones(&mut self, f: &mut dyn FnMut(&mut FocusChain, &mut [&mut dyn FocusZone])) {
         let Self {
-            state, window, back, ..
+            state,
+            window,
+            back,
+            ..
         } = self;
         let mut scroll = window.zone(ROW_COUNT);
         f(state.chain(), &mut [&mut scroll, back]);

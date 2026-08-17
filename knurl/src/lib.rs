@@ -13,5 +13,9 @@ pub use knurl_core::{
     Title, Toggle, Tree, TreeItem, TreeModel, VStack, bitmap_runs,
 };
 
+/// How to write a widget of your own: the `Component` contract, what a frame
+/// costs, and the traps that are already known.
+pub use knurl_core::custom_widget;
+
 #[cfg(feature = "graphics")]
 pub use knurl_graphics as graphics;

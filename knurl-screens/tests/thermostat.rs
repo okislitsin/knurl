@@ -35,7 +35,11 @@ fn a_fresh_dial_paints_once_and_then_goes_quiet() {
 
     let mut t = RecordingTarget::new(128, 64);
     dial.view(&mut t, AREA);
-    assert_eq!(t.ops().first(), Some(&Op::Clear { area: AREA }), "self-clear");
+    assert_eq!(
+        t.ops().first(),
+        Some(&Op::Clear { area: AREA }),
+        "self-clear"
+    );
     assert!(drew(&t, "20C"));
     assert_eq!(t.take_dirty_rect(), Some(AREA));
 
@@ -141,7 +145,12 @@ fn the_scale_appears_only_when_there_is_room_for_it() {
     );
 
     let two_rows = painted(&Thermostat::new(20), Area::new(0, 0, 100, 22));
-    assert!(two_rows.ops().iter().any(|op| matches!(op, Op::Line { .. })));
+    assert!(
+        two_rows
+            .ops()
+            .iter()
+            .any(|op| matches!(op, Op::Line { .. }))
+    );
 }
 
 /// Semantic styles, not colours: the warm end of the dial says `Danger`, and a
@@ -156,7 +165,13 @@ fn the_warm_end_is_a_style_and_not_a_colour() {
             .any(|op| {
                 matches!(
                     op,
-                    Op::Text { style: Style::Danger, .. } | Op::Fill { style: Style::Danger, .. }
+                    Op::Text {
+                        style: Style::Danger,
+                        ..
+                    } | Op::Fill {
+                        style: Style::Danger,
+                        ..
+                    }
                 )
             })
     };
@@ -208,7 +223,10 @@ fn the_cursor_leaves_the_dial_at_its_limit_and_finds_the_way_out() {
     }
     assert_eq!(screen.update(&Msg::Down), None);
     assert_eq!(screen.state().focus_index(), 1, "onto < Back");
-    assert!(screen.update(&Msg::Select).is_some(), "and it is the way out");
+    assert!(
+        screen.update(&Msg::Select).is_some(),
+        "and it is the way out"
+    );
 }
 
 /// Turning the dial costs the dial, not the screen.
