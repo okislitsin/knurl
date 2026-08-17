@@ -53,6 +53,7 @@ pub mod tab_forms;
 pub mod table;
 pub mod text;
 pub mod textinput;
+pub mod thermostat;
 pub mod toggles;
 pub mod tree;
 pub mod two_forms;
@@ -80,6 +81,7 @@ pub enum Page {
     Indicators,
     Position,
     Canvas,
+    Thermostat,
     TabForms,
     Status,
     Help,
@@ -105,6 +107,7 @@ pub const MENU: &[&str] = &[
     "Indicators",
     "Position",
     "Canvas",
+    "Thermostat",
     "Tabs + forms",
     "Status bar",
     "Help",
@@ -130,6 +133,7 @@ const PAGES: &[Page] = &[
     Page::Indicators,
     Page::Position,
     Page::Canvas,
+    Page::Thermostat,
     Page::TabForms,
     Page::Status,
     Page::Help,
@@ -162,6 +166,7 @@ impl Page {
             Page::Indicators => "Indicators",
             Page::Position => "Position",
             Page::Canvas => "Canvas",
+            Page::Thermostat => "Thermostat",
             Page::TabForms => "Tabs + forms",
             Page::Status => "Status bar",
             Page::Help => "Help",
@@ -179,6 +184,7 @@ impl Page {
             Page::Toggles | Page::Editors | Page::Form | Page::Input => "Push: edit / activate",
             Page::TwoForms | Page::ListForm => "Turn: between the zones",
             Page::TabForms => "Push: into the tab's form",
+            Page::Thermostat => "Turn: set   Push: apply",
             Page::Tree => "Push: expand / Back",
             Page::Dialog => "Push: a button / Back",
             Page::Pager => "Turn: scroll, bottom = follow",

@@ -13,7 +13,8 @@ use crate::{
     editors::EditorsScreen, form::FormScreen, help::HelpScreen, indicators::IndicatorsScreen,
     list::ListScreen, list_form::ListFormScreen, menu::MenuScreen, pager::PagerScreen,
     position::PositionScreen, radio::RadioScreen, status::StatusScreen, tab_forms::TabFormsScreen,
-    table::TableScreen, text::TextScreen, textinput::TextInputScreen, toggles::TogglesScreen,
+    table::TableScreen, text::TextScreen, textinput::TextInputScreen,
+    thermostat::ThermostatScreen, toggles::TogglesScreen,
     tree::TreeScreen, two_forms::TwoFormsScreen,
 };
 
@@ -40,6 +41,7 @@ pub struct App<'a, M: LinesModel + ?Sized> {
     indicators: IndicatorsScreen,
     position: PositionScreen,
     canvas: CanvasScreen,
+    thermostat: ThermostatScreen,
     tab_forms: TabFormsScreen,
     status: StatusScreen,
     help: HelpScreen,
@@ -68,6 +70,7 @@ impl<'a, M: LinesModel + ?Sized> App<'a, M> {
             indicators: IndicatorsScreen::new(),
             position: PositionScreen::new(),
             canvas: CanvasScreen::new(),
+            thermostat: ThermostatScreen::new(),
             tab_forms: TabFormsScreen::new(panel),
             status: StatusScreen::new(),
             help: HelpScreen::new(panel),
@@ -105,6 +108,7 @@ impl<'a, M: LinesModel + ?Sized> App<'a, M> {
             Page::Indicators => &mut self.indicators,
             Page::Position => &mut self.position,
             Page::Canvas => &mut self.canvas,
+            Page::Thermostat => &mut self.thermostat,
             Page::TabForms => &mut self.tab_forms,
             Page::Status => &mut self.status,
             Page::Help => &mut self.help,
