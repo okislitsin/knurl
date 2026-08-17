@@ -15,7 +15,7 @@ use knurl::{Area, Msg, RenderTarget, Screen};
 use knurl_core::mock::{Op, RecordingTarget};
 use knurl_screens::{
     App, AppEvent, MENU, Page, Panel, canvas::CanvasScreen, menu::MenuScreen,
-    tab_forms::TabFormsScreen, two_forms::TwoFormsScreen,
+    tab_forms::TabFormsScreen, text::TextScreen, two_forms::TwoFormsScreen,
 };
 
 /// What a screen gets on a 128x64 panel once the title row is taken.
@@ -36,6 +36,14 @@ fn drew(t: &RecordingTarget, needle: &str) -> bool {
     t.ops()
         .iter()
         .any(|op| matches!(op, Op::Text { text, .. } if text.contains(needle)))
+}
+
+/// The menu row carrying `label` - so a test names the page it wants and a new
+/// catalogue entry does not renumber every test below.
+fn row_of(label: &str) -> usize {
+    MENU.iter()
+        .position(|m| *m == label)
+        .unwrap_or_else(|| panic!("no menu row {label:?}"))
 }
 
 /// Opens the menu row `row` on a fresh application.
@@ -310,7 +318,7 @@ impl Tft {
 /// costs no bytes, rather than a panel's worth of them.
 #[test]
 fn an_idle_frame_has_no_region() {
-    let mut tft = Tft::open(1); // List
+    let mut tft = Tft::open(row_of("List"));
     assert_eq!(tft.frame(), None);
     assert_eq!(tft.frame(), None);
 }
@@ -319,7 +327,7 @@ fn an_idle_frame_has_no_region() {
 /// granularity is the widget, because that is what clears its own area.
 #[test]
 fn rotating_in_a_list_repaints_the_list_and_not_the_panel() {
-    let mut tft = Tft::open(1);
+    let mut tft = Tft::open(row_of("List"));
     tft.send(&Msg::Down);
     let region = tft.frame().expect("the cursor moved");
     // The screen's list: the body minus the "< Back" row under it.
@@ -334,7 +342,7 @@ fn rotating_in_a_list_repaints_the_list_and_not_the_panel() {
 /// its life on, and 10 rows of a 240px panel is what it should cost.
 #[test]
 fn a_value_being_edited_costs_one_row() {
-    let mut tft = Tft::open(6); // Editors
+    let mut tft = Tft::open(row_of("Editors"));
     tft.send(&Msg::Down);
     tft.send(&Msg::Down);
     tft.send(&Msg::Select); // into edit
@@ -349,7 +357,7 @@ fn a_value_being_edited_costs_one_row() {
 /// repainted on every event, and the region reached up to it.
 #[test]
 fn moving_inside_a_tabs_form_leaves_the_strip_alone() {
-    let mut tft = Tft::open(13); // Tabs + forms
+    let mut tft = Tft::open(row_of("Tabs + forms"));
     tft.send(&Msg::Select); // into the active tab's form
     let _ = tft.frame();
     tft.send(&Msg::Down); // between the form's fields
@@ -360,6 +368,69 @@ fn moving_inside_a_tabs_form_leaves_the_strip_alone() {
         region.intersect(strip).is_none(),
         "the tab strip is not in {region:?}"
     );
+}
+
+/// The anti-pattern the library documents, measured on the demo that used to
+/// have it. Every row of the Indicators screen lives in a field, so a tick
+/// costs the indicators that moved - one text row when only the spinner
+/// advances - instead of the whole hand-drawn window.
+#[test]
+fn a_tick_costs_the_indicators_that_moved_and_not_the_window() {
+    let mut tft = Tft::open(row_of("Indicators"));
+    assert_eq!(tft.frame(), None, "a settled screen draws nothing");
+
+    // The first tick advances the spinner alone: the triangle wave only moves
+    // every second tick, and a setter that lands on the value it already had
+    // does not dirty.
+    tft.app.tick();
+    let spinner_only = tft.frame().expect("the spinner advanced");
+    assert_eq!(
+        spinner_only,
+        Area::new(4, 12, 312, 10),
+        "one text row: the spinner's"
+    );
+
+    // The next one moves the bar and the gauge as well. They sit two and four
+    // rows below the spinner, and the region is one box over all three - which
+    // is the documented trade in `DirtyRect`, not a widget repainting too much.
+    tft.app.tick();
+    let all_three = tft.frame().expect("the level moved");
+    assert_eq!(all_three, Area::new(4, 12, 312, 50), "rows 0 through 4");
+    assert!(
+        all_three.h < Tft::BODY.h / 2,
+        "still a fraction of the panel: {all_three:?}"
+    );
+}
+
+/// A screen of static rows costs nothing at all once it has settled - it used
+/// to report the whole window on every frame, because it rebuilt its rows
+/// inside `draw` and cleared the window to paint them.
+#[test]
+fn a_hand_drawn_stack_of_static_rows_settles_to_no_region_at_all() {
+    let mut tft = Tft::open(row_of("Text"));
+    assert_eq!(tft.frame(), None);
+    assert_eq!(tft.frame(), None);
+
+    // Scrolling is what the window is for, and it costs the window - once. A
+    // 320x240 panel fits all nine rows, so this needs the small one, where the
+    // same screen has something to scroll.
+    let window = Area::new(0, 0, 128, 44); // 4 rows, plus the "< Back" row
+    let mut screen = TextScreen::new();
+    screen.enter();
+    let mut t = RecordingTarget::new(128, 64);
+    screen.view(&mut t, window);
+    let _ = t.take_dirty_rect();
+    assert_eq!(t.take_dirty_rect(), None);
+
+    assert_eq!(screen.update(&Msg::Down), None, "the window scrolled");
+    screen.view(&mut t, window);
+    assert_eq!(
+        t.take_dirty_rect(),
+        Some(Area::new(0, 0, 128, 34)),
+        "the window, and not the row of chrome under it"
+    );
+    screen.view(&mut t, window);
+    assert_eq!(t.take_dirty_rect(), None, "and it goes quiet again");
 }
 
 /// Opening another screen is a full repaint, and should be: everything on the

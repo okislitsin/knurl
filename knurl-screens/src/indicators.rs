@@ -5,15 +5,21 @@
 //! cursor is on the scroll window (or on `< Back`), and the indicators still
 //! have to move. They are advanced in [`Screen::tick`], which the application
 //! calls directly.
+//!
+//! It is also the screen where the cost of getting the dirty gate wrong was
+//! measured. Every row lives in a field here - the two captions and the three
+//! indicators - so a tick repaints the indicators that moved and nothing else.
+//! Built inside `draw` instead, the same tick reported 84% of a 320x240 panel
+//! dirty, because a widget built per frame is dirty by construction.
 
 use knurl::{
     Area, Button, Component,
     Constraint::{Fill, Length},
     FocusChain, FocusZone, Label, LineGauge, Msg, Outcome, ProgressBar, RenderTarget, Screen,
-    ScreenState, ScrollZone, Spinner, Style, VStack,
+    ScreenState, Spinner, Style, VStack,
 };
 
-use crate::{AppEvent, stack};
+use crate::{AppEvent, stack::Stack};
 
 /// Rows: spinner, caption, bar, caption, gauge, caption.
 const ROW_COUNT: usize = 6;
@@ -26,11 +32,14 @@ fn triangle(phase: u32) -> u16 {
 
 pub struct IndicatorsScreen {
     state: ScreenState,
-    spinner: Spinner,
     phase: u32,
-    level: u16,
-    scroll: usize,
-    visible: usize,
+    rows: Stack,
+    spinner: Spinner,
+    progress_caption: Label<'static>,
+    bar: ProgressBar,
+    gauge_caption: Label<'static>,
+    gauge: LineGauge,
+    footer: Label<'static>,
     back: Button<'static>,
 }
 
@@ -38,11 +47,14 @@ impl IndicatorsScreen {
     pub fn new() -> Self {
         Self {
             state: ScreenState::new(),
-            spinner: Spinner::new().with_label("live"),
             phase: 0,
-            level: 0,
-            scroll: 0,
-            visible: 1,
+            rows: Stack::new(),
+            spinner: Spinner::new().with_label("live"),
+            progress_caption: Label::new("Progress").with_style(Style::Muted),
+            bar: ProgressBar::new().with_max(100),
+            gauge_caption: Label::new("Gauge").with_style(Style::Muted),
+            gauge: LineGauge::new().with_max(100),
+            footer: Label::new("live values").with_style(Style::Muted),
             back: Button::new("< Back"),
         }
     }
@@ -63,14 +75,10 @@ impl Screen for IndicatorsScreen {
 
     fn zones(&mut self, f: &mut dyn FnMut(&mut FocusChain, &mut [&mut dyn FocusZone])) {
         let Self {
-            state,
-            scroll,
-            visible,
-            back,
-            ..
+            state, rows, back, ..
         } = self;
-        let mut rows = ScrollZone::new(scroll, ROW_COUNT.saturating_sub(*visible));
-        f(state.chain(), &mut [&mut rows, back]);
+        let mut window = rows.zone(ROW_COUNT);
+        f(state.chain(), &mut [&mut window, back]);
     }
 
     fn on_outcome(&mut self, _msg: &Msg, _outcome: Outcome) -> Option<AppEvent> {
@@ -78,14 +86,19 @@ impl Screen for IndicatorsScreen {
     }
 
     fn on_enter(&mut self) {
-        self.scroll = 0;
-        self.spinner.mark_dirty(); // drawn inside the stack, not gated by it
+        // The rows are inside a hand-drawn window, and the repaint cascade walks
+        // zones - so the window is the one thing that has to be told itself.
+        self.rows.mark_dirty();
     }
 
     /// Past the chain, on purpose: the encoder is somewhere else entirely.
     fn tick(&mut self) -> bool {
         self.phase = self.phase.wrapping_add(1);
-        self.level = triangle(self.phase);
+        let level = triangle(self.phase);
+        // Setters that dirty only on a real change: two ticks out of three the
+        // level lands on the value it already had, and those cost nothing.
+        self.bar.set_value(level);
+        self.gauge.set_value(level);
         let _ = self.spinner.update(&Msg::Tick);
         true
     }
@@ -93,31 +106,35 @@ impl Screen for IndicatorsScreen {
     fn draw(&mut self, target: &mut dyn RenderTarget, area: Area) {
         let lh = target.line_height().max(1);
         let [window, foot] = VStack::split(area, &[Fill(1), Length(lh)]);
-        let (spinner, level) = (&self.spinner, self.level);
-        self.visible = stack::rows(
-            target,
-            window,
-            self.scroll,
-            ROW_COUNT,
-            |t, i, row| match i {
-                0 => spinner.view(t, row),
-                1 => Label::new("Progress").with_style(Style::Muted).view(t, row),
-                2 => {
-                    let mut bar = ProgressBar::new().with_max(100);
-                    bar.set_value(level);
-                    bar.view(t, row);
-                }
-                3 => Label::new("Gauge").with_style(Style::Muted).view(t, row),
-                4 => {
-                    let mut gauge = LineGauge::new().with_max(100);
-                    gauge.set_value(level);
-                    gauge.view(t, row);
-                }
-                _ => Label::new("live values")
-                    .with_style(Style::Muted)
-                    .view(t, row),
-            },
-        );
-        self.back.view(target, foot);
+        let Self {
+            rows,
+            spinner,
+            progress_caption,
+            bar,
+            gauge_caption,
+            gauge,
+            footer,
+            back,
+            ..
+        } = self;
+
+        rows.rows(target, window, ROW_COUNT, |t, i, row, shifted| {
+            // `shifted` means this slot now shows a different row than it did,
+            // so whatever lands in it owes a paint. Otherwise every widget
+            // answers for itself, and a still row draws nothing.
+            let w: &dyn Component = match i {
+                0 => spinner,
+                1 => progress_caption,
+                2 => bar,
+                3 => gauge_caption,
+                4 => gauge,
+                _ => footer,
+            };
+            if shifted {
+                w.mark_dirty();
+            }
+            w.view(t, row);
+        });
+        back.view(target, foot);
     }
 }
