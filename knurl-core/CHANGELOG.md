@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/okislitsin/knurl/compare/knurl-core-v0.4.0...knurl-core-v0.5.0) - 2026-08-17
+
+### Added
+
+- *(core)* a target that can say which pixels moved
+
+### Fixed
+
+- *(core)* the always-dirty widgets get the gate everybody else has
+
+### Other
+
+- how to send the region, and the habit that ruins it
+
 ## [0.4.0](https://github.com/okislitsin/knurl/compare/knurl-core-v0.3.0...knurl-core-v0.4.0) - 2026-08-17
 
 ### Added

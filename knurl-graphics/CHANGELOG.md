@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6](https://github.com/okislitsin/knurl/compare/knurl-graphics-v0.1.5...knurl-graphics-v0.1.6) - 2026-08-17
+
+### Added
+
+- *(graphics)* both pixel targets accumulate the region they drew
+
+### Other
+
+- how to send the region, and the habit that ruins it
+
 ## [0.1.5](https://github.com/okislitsin/knurl/compare/knurl-graphics-v0.1.4...knurl-graphics-v0.1.5) - 2026-08-17
 
 ### Added
