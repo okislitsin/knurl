@@ -11,7 +11,7 @@
 //! anything a device would not have, and the recording target is a test-only
 //! facility of `knurl-core`.
 
-use knurl::{Area, Msg, Screen};
+use knurl::{Area, Msg, RenderTarget, Screen};
 use knurl_core::mock::{Op, RecordingTarget};
 use knurl_screens::{
     App, AppEvent, MENU, Page, Panel, canvas::CanvasScreen, menu::MenuScreen,
@@ -264,4 +264,115 @@ fn the_cursor_enters_a_tabs_form_and_leaves_it_again() {
     }
     assert_eq!(screen.state().focus_index(), 1, "onto < Back");
     assert_eq!(screen.update(&Msg::Select), Some(AppEvent::GoBack));
+}
+
+// ── What a frame costs on the bus ────────────────────────────────────────────
+
+/// The demo on a 320x240 colour panel, laid out exactly as `examples/tft.rs`
+/// does it: a title row, the application's body, a status-bar hint. The
+/// recording target's metrics are `FONT_6X10`'s, so these are the same pixels
+/// the simulator draws.
+struct Tft {
+    app: App<'static, [&'static str]>,
+    target: RecordingTarget,
+}
+
+impl Tft {
+    /// The body area the host hands the application (`tft.rs`, verbatim).
+    const BODY: Area = Area::new(4, 12, 312, 216);
+
+    fn open(row: usize) -> Self {
+        let mut tft = Self {
+            app: app(),
+            target: RecordingTarget::new(320, 240),
+        };
+        for _ in 0..row {
+            tft.app.update(&Msg::Down);
+        }
+        tft.app.update(&Msg::Select);
+        tft.frame(); // the arriving screen repaints over its predecessor
+        tft.frame(); // ...and settles
+        tft
+    }
+
+    /// Paints one frame and returns the region it would cost to push.
+    fn frame(&mut self) -> Option<Area> {
+        self.app.view(&mut self.target, Self::BODY);
+        self.target.take_dirty_rect()
+    }
+
+    fn send(&mut self, msg: &Msg) {
+        self.app.update(msg);
+    }
+}
+
+/// A settled screen with nothing dirty draws nothing at all - so the frame
+/// costs no bytes, rather than a panel's worth of them.
+#[test]
+fn an_idle_frame_has_no_region() {
+    let mut tft = Tft::open(1); // List
+    assert_eq!(tft.frame(), None);
+    assert_eq!(tft.frame(), None);
+}
+
+/// Rotating the encoder in a list repaints **the list**, not the panel: the
+/// granularity is the widget, because that is what clears its own area.
+#[test]
+fn rotating_in_a_list_repaints_the_list_and_not_the_panel() {
+    let mut tft = Tft::open(1);
+    tft.send(&Msg::Down);
+    let region = tft.frame().expect("the cursor moved");
+    // The screen's list: the body minus the "< Back" row under it.
+    assert_eq!(region, Area::new(4, 12, 312, 206));
+    assert!(
+        region.h < Tft::BODY.h,
+        "the way out below the list was not touched"
+    );
+}
+
+/// Editing a value costs its row. This is the interaction the encoder spends
+/// its life on, and 10 rows of a 240px panel is what it should cost.
+#[test]
+fn a_value_being_edited_costs_one_row() {
+    let mut tft = Tft::open(6); // Editors
+    tft.send(&Msg::Down);
+    tft.send(&Msg::Down);
+    tft.send(&Msg::Select); // into edit
+    let _ = tft.frame();
+    tft.send(&Msg::Up); // one step
+    let region = tft.frame().expect("the value changed");
+    assert_eq!(region.h, 10, "one text row: {region:?}");
+}
+
+/// Moving inside a form behind tabs leaves the strip alone - two rows, and the
+/// top of the panel is not in them. Before the strip had a dirty gate it was
+/// repainted on every event, and the region reached up to it.
+#[test]
+fn moving_inside_a_tabs_form_leaves_the_strip_alone() {
+    let mut tft = Tft::open(13); // Tabs + forms
+    tft.send(&Msg::Select); // into the active tab's form
+    let _ = tft.frame();
+    tft.send(&Msg::Down); // between the form's fields
+    let region = tft.frame().expect("the focus moved");
+    let strip = Area::new(Tft::BODY.x, Tft::BODY.y, Tft::BODY.w, 10);
+    assert_eq!(region, Area::new(4, 22, 312, 20), "the two rows involved");
+    assert!(
+        region.intersect(strip).is_none(),
+        "the tab strip is not in {region:?}"
+    );
+}
+
+/// Opening another screen is a full repaint, and should be: everything on the
+/// panel belongs to the screen that just left.
+#[test]
+fn opening_a_screen_repaints_all_of_it() {
+    let mut app = app();
+    app.update(&Msg::Down); // onto "List"
+    let mut target = RecordingTarget::new(320, 240);
+    app.view(&mut target, Tft::BODY);
+    let _ = target.take_dirty_rect();
+
+    app.update(&Msg::Select);
+    app.view(&mut target, Tft::BODY);
+    assert_eq!(target.take_dirty_rect(), Some(Tft::BODY));
 }
