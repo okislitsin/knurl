@@ -1,6 +1,6 @@
 [package]
 name = "knurl"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 description = "Elm-inspired TUI for embedded pixel displays - OLED, TFT"
 license = "MIT OR Apache-2.0"
@@ -14,5 +14,5 @@ default = []
 graphics = ["knurl-graphics"]
 
 [dependencies]
-knurl-core     = { path = "../knurl-core", version = "0.5.0" }
-knurl-graphics = { path = "../knurl-graphics", version = "0.1.6", optional = true }
+knurl-core     = { path = "../knurl-core", version = "0.5.1" }
+knurl-graphics = { path = "../knurl-graphics", version = "0.1.7", optional = true }

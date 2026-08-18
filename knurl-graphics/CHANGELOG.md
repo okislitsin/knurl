@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7](https://github.com/okislitsin/knurl/compare/knurl-graphics-v0.1.6...knurl-graphics-v0.1.7) - 2026-08-18
+
+### Other
+
+- *(sim)* a screenshot matrix of every widget in every state
+- the contract for writing a widget of your own
+
 ## [0.1.6](https://github.com/okislitsin/knurl/compare/knurl-graphics-v0.1.5...knurl-graphics-v0.1.6) - 2026-08-17
 
 ### Added
