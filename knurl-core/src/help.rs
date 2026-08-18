@@ -99,7 +99,10 @@ impl<'a> Component for Help<'a> {
             return;
         }
 
-        let overflow = n > rows;
+        // The indicator needs its own column: an area narrower than the
+        // reservation has no room for one, and drawing it anyway used to
+        // compute `area.x + area.w - 3` and panic on the subtraction.
+        let overflow = n > rows && area.w >= V_SCROLL_RESERVE;
         let reserve = if overflow { V_SCROLL_RESERVE } else { 0 };
         let content_w = area.w.saturating_sub(reserve);
         let key_w = self.key_w.min(content_w);
@@ -239,6 +242,21 @@ mod tests {
     }
 
     // ── Outcome (event routing) ─────────────────────────────────────────────
+
+    /// Found by the seeded sweep (`smoke.rs`, seed 176), and it panicked:
+    /// a `Help` that overflows puts its indicator at `area.x + area.w - 3`, and
+    /// an area narrower than three pixels made that subtraction wrap. A layout
+    /// that has run out of room hands over exactly such an area.
+    #[test]
+    fn a_scrolling_help_squeezed_below_its_indicator_does_not_panic() {
+        const ITEMS: &[(&str, &str)] = &[("a", "1"), ("b", "2"), ("c", "3"), ("d", "4")];
+        let h = Help::new(ITEMS);
+        let mut t = RecordingTarget::new(64, 32);
+        for w in 0..6u16 {
+            h.mark_dirty();
+            h.view(&mut t, Area::new(0, 0, w, 20)); // two rows of four: it scrolls
+        }
+    }
 
     #[test]
     fn help_spends_a_scroll_and_hands_back_an_edge() {
