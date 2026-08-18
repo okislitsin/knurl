@@ -136,9 +136,11 @@
 //! * `draw` takes `&self`. Anything it has to remember - the row count it just
 //!   worked out from the area, for instance - goes in a [`Cell`](core::cell::Cell),
 //!   which is how [`List`](crate::List) tells the next `update` how big a page is.
-//! * `view` marks the widget clean whether or not `draw` found room to paint.
-//!   A widget that bails on a too-small area is *clean* afterwards, so if your
-//!   layout can grow at runtime, mark the widget dirty where it grows.
+//! * `view` marks the widget clean once `draw` has run, so a widget that can
+//!   be handed less room than it can use declares that room in
+//!   [`min_size`](crate::Component::min_size) rather than bailing out of
+//!   `draw`. Below the minimum nothing is drawn, nothing is cleared, and the
+//!   paint stays owed for when the layout grows back.
 //!
 //! ### The dirty flag is set only by a real change
 //!
@@ -152,10 +154,28 @@
 //!
 //! ### Guard the area
 //!
-//! `view` guarantees a non-empty area, not a useful one. A screen hands over
-//! whatever its layout produced, and four pixels is a valid answer. Check for
-//! the room you need at the top of `draw` and return: the widget has already
-//! had its area cleared, so returning leaves it blank rather than broken.
+//! A screen hands over whatever its layout produced, and four pixels is a valid
+//! answer. Say what you need in [`min_size`](crate::Component::min_size) - it is
+//! checked **before** the clear, so a widget that cannot paint is left alone and
+//! stays dirty:
+//!
+//! ```
+//! # use knurl_core::{Component, Msg, Outcome, RenderTarget};
+//! # struct Dial;
+//! # impl Component for Dial {
+//! #     fn update(&mut self, _m: &Msg) -> Outcome { Outcome::Ignored }
+//! /// A value row and a scale under it, and four characters of value.
+//! fn min_size(&self, target: &dyn RenderTarget) -> (u16, u16) {
+//!     (4 * target.char_width(), 2 * target.line_height())
+//! }
+//! # }
+//! ```
+//!
+//! Below that the widget is never called, so `draw` can rely on the room it
+//! asked for. It should still degrade rather than assume more: an area *above*
+//! the minimum but short of comfortable is the ordinary case, and dropping the
+//! optional half of the picture is the answer (the example widget drops its
+//! scale and keeps the number).
 //!
 //! ### `Outcome` is about the event, never the pixels
 //!

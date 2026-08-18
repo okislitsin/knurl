@@ -219,6 +219,15 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
         }
     }
 
+    /// A header row plus one data row: given less, the table can paint nothing
+    /// at all, and `view` must not call that a paint (see
+    /// [`min_size`](Component::min_size)).
+    fn min_size(&self, target: &dyn RenderTarget) -> (u16, u16) {
+        let line_h = target.line_height().max(1);
+        let header = if self.headers.is_some() { line_h } else { 0 };
+        (1, line_h + header)
+    }
+
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
         let line_h = target.line_height().max(1);
         let header_h = if self.headers.is_some() { line_h } else { 0 };
