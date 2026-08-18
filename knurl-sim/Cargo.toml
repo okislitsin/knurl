@@ -26,6 +26,11 @@ embedded-graphics-simulator = { version = "0.8.0", optional = true }
 # The demo application itself: no_std screens, shared by both demos and built
 # for thumbv6m in CI.
 knurl-screens = { path = "../knurl-screens" }
+# Test-only: the screenshot matrix compares decoded pixels against its golden
+# images, never PNG bytes - an encoder that changes its output between versions
+# would otherwise make the matrix lie. Already in the tree via
+# embedded-graphics-simulator; only the PNG codec is needed.
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [features]
 default = ["desktop"]
