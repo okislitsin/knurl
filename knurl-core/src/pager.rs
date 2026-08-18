@@ -336,9 +336,12 @@ impl<'a, M: LinesModel + ?Sized> Component for Pager<'a, M> {
         };
         self.wrap_cols.set(cols);
 
-        // Render wrapped lines from `offset` until the view fills.
+        // Render wrapped lines from `offset` until the view fills. The offset
+        // is clamped on the way in: the log can shrink under the pager between
+        // two events (see `LinesModel::revision`), and an offset left past the
+        // end would draw an empty page over a log that has lines in it.
         let mut row = 0usize;
-        let mut idx = self.offset;
+        let mut idx = self.offset.min(n - 1);
         while row < rows && idx < n {
             let mut lb = LineBuf::new();
             self.model.write_line(idx, &mut lb);
