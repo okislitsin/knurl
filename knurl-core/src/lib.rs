@@ -20,6 +20,8 @@ mod pager;
 mod radio;
 mod router;
 mod screen;
+#[cfg(test)]
+mod smoke;
 mod statusbar;
 mod table;
 mod tabs;
