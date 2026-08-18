@@ -1,18 +1,28 @@
-//! Position: a window over a fixed set of rows, with a [`Scrollbar`] beside it
-//! and a [`Paginator`] under it saying where in the whole the window sits.
+//! Position: a window over a fixed set of rows, with a [`Scrollbar`](knurl::Scrollbar)
+//! beside it and a [`Paginator`] under it saying where in the whole the window
+//! sits.
 //!
 //! Same shape as [`text`](crate::text) - a hand-drawn stack driven by a
-//! [`ScrollZone`] - but it lays its own window out, because the scrollbar and
-//! the paginator both have to agree with the row loop.
+//! [`ScrollZone`](knurl::ScrollZone) inside [`Stack`] - with a paginator added
+//! underneath. The paginator is a field, so it repaints when the window moves
+//! and not otherwise; its page count follows the panel, which is why it is set
+//! rather than built in.
+//!
+//! The rows are built where they are drawn, and this is the one shape in which
+//! that is honest: the window clears and repaints every row **only on the
+//! frames where it shifted**, so a `Label` built there is dirty at the moment
+//! its row genuinely changed. On every other frame nothing is built and nothing
+//! is drawn - the screen used to report its whole body on every frame, idle
+//! ones included.
 
 use knurl::{
     Area, Button, Component,
     Constraint::{Fill, Length},
     FocusChain, FocusZone, Label, Msg, Outcome, Paginator, RenderTarget, Screen, ScreenState,
-    ScrollZone, Scrollbar, Style, VStack,
+    Style, VStack,
 };
 
-use crate::AppEvent;
+use crate::{AppEvent, stack::Stack};
 
 const ROWS: &[&str] = &[
     "Row 1", "Row 2", "Row 3", "Row 4", "Row 5", "Row 6", "Row 7", "Row 8", "Row 9", "Row 10",
@@ -21,8 +31,8 @@ const ROWS: &[&str] = &[
 
 pub struct PositionScreen {
     state: ScreenState,
-    offset: usize,
-    visible: usize,
+    window: Stack,
+    pages: Paginator,
     back: Button<'static>,
 }
 
@@ -30,8 +40,10 @@ impl PositionScreen {
     pub fn new() -> Self {
         Self {
             state: ScreenState::new(),
-            offset: 0,
-            visible: 1,
+            window: Stack::new(),
+            // Corrected on the first frame, once the panel has said how many
+            // rows fit.
+            pages: Paginator::new(ROWS.len()),
             back: Button::new("< Back"),
         }
     }
@@ -53,55 +65,49 @@ impl Screen for PositionScreen {
     fn zones(&mut self, f: &mut dyn FnMut(&mut FocusChain, &mut [&mut dyn FocusZone])) {
         let Self {
             state,
-            offset,
-            visible,
+            window,
             back,
+            ..
         } = self;
-        let mut rows = ScrollZone::new(offset, ROWS.len().saturating_sub(*visible));
-        f(state.chain(), &mut [&mut rows, back]);
+        let mut scroll = window.zone(ROWS.len());
+        f(state.chain(), &mut [&mut scroll, back]);
     }
 
     fn on_outcome(&mut self, _msg: &Msg, _outcome: Outcome) -> Option<AppEvent> {
         self.back.take_pressed().then_some(AppEvent::GoBack)
     }
 
+    /// Rows inside a hand-drawn window are not zones, so the cascade that
+    /// repaints a screen on entry does not reach them - the window is told.
     fn on_enter(&mut self) {
-        self.offset = 0;
+        self.window.mark_dirty();
     }
 
     fn draw(&mut self, target: &mut dyn RenderTarget, area: Area) {
         let lh = target.line_height().max(1);
         let [body, foot] = VStack::split(area, &[Fill(1), Length(lh)]);
         let [rows, pages] = VStack::split(body, &[Fill(1), Length(lh)]);
-        target.clear(rows);
+        let Self {
+            window,
+            pages: paginator,
+            back,
+            ..
+        } = self;
 
-        let visible = ((rows.h / lh) as usize).clamp(1, ROWS.len());
-        self.visible = visible;
-        for r in 0..visible {
-            let Some(text) = ROWS.get(self.offset + r) else {
-                break;
-            };
-            let style = if r == 0 { Style::Focus } else { Style::Muted };
-            Label::new(text).with_style(style).view(
-                target,
-                Area::new(rows.x, rows.y + r as u16 * lh, rows.w.saturating_sub(4), lh),
-            );
-        }
+        // Which row carries the cursor depends on where the window is, not on
+        // what is in it - so it is decided here, on the frames that shift.
+        let top = window.scroll();
+        window.rows(target, rows, ROWS.len(), |t, i, row, shifted| {
+            if !shifted {
+                return;
+            }
+            let style = if i == top { Style::Focus } else { Style::Muted };
+            Label::new(ROWS[i]).with_style(style).view(t, row);
+        });
 
-        let mut bar = Scrollbar::new();
-        bar.set(ROWS.len(), visible, self.offset);
-        bar.view(
-            target,
-            Area::new(
-                rows.x + rows.w.saturating_sub(3),
-                rows.y,
-                3,
-                visible as u16 * lh,
-            ),
-        );
-        Paginator::new(ROWS.len() - visible + 1)
-            .with_current(self.offset)
-            .view(target, pages);
-        self.back.view(target, foot);
+        paginator.set_pages(ROWS.len().saturating_sub(window.visible()) + 1);
+        paginator.set_current(window.scroll());
+        paginator.view(target, pages);
+        back.view(target, foot);
     }
 }

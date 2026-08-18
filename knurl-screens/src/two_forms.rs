@@ -24,6 +24,11 @@ const WIDE_PX: u16 = 200;
 
 pub struct TwoFormsScreen {
     state: ScreenState,
+    /// The area the pane boxes were last drawn for. Chrome is a widget too:
+    /// redrawn every frame it pulls the whole body into the dirty region, and
+    /// the forms inside it gate themselves for nothing. It changes only when
+    /// the screen is entered or the layout moves, so that is when it is drawn.
+    chrome: Option<Area>,
     left: Form,
     fan: Toggle<'static>,
     speed: Slider<'static>,
@@ -37,6 +42,7 @@ impl TwoFormsScreen {
     pub fn new(panel: Panel) -> Self {
         Self {
             state: ScreenState::new(),
+            chrome: None,
             left: Form::new(),
             fan: Toggle::new("Fan").with_on(true),
             speed: Slider::new("Spd")
@@ -74,6 +80,7 @@ impl TwoFormsScreen {
             lamp,
             level,
             back,
+            ..
         } = self;
         (state, (left, [fan, speed]), (right, [lamp, level]), back)
     }
@@ -98,6 +105,13 @@ impl Screen for TwoFormsScreen {
         self.back.take_pressed().then_some(AppEvent::GoBack)
     }
 
+    /// Entering clears the panel, boxes included - and the boxes are not zones,
+    /// so the repaint cascade does not reach them. This is the one line that
+    /// keeps them on screen.
+    fn on_enter(&mut self) {
+        self.chrome = None;
+    }
+
     fn draw(&mut self, target: &mut dyn RenderTarget, area: Area) {
         let lh = target.line_height().max(1);
         let [body, foot] = VStack::split(area, &[Fill(1), Length(lh)]);
@@ -107,17 +121,31 @@ impl Screen for TwoFormsScreen {
             VStack::split(body, &[Fill(1), Fill(1)])
         };
 
+        // The boxes are chrome: they change when the screen is entered or the
+        // layout moves, and on every other frame the two forms are the only
+        // things with anything to say.
+        let boxes = self.chrome != Some(area);
+        self.chrome = Some(area);
+
         let (_, (left, lf), (right, rf), back) = self.parts();
-        pane(target, first, left, &lf);
-        pane(target, second, right, &rf);
+        pane(target, first, left, &lf, boxes);
+        pane(target, second, right, &rf, boxes);
         back.view(target, foot);
     }
 }
 
 /// One form inside a rounded box, indented off it by a `Padding` - the layout
 /// primitives doing what the old "Layout" page only pointed at.
-fn pane(target: &mut dyn RenderTarget, area: Area, form: &Form, fields: &[&mut dyn FormField]) {
-    target.draw_box(area, BorderStyle::Rounded);
+fn pane(
+    target: &mut dyn RenderTarget,
+    area: Area,
+    form: &Form,
+    fields: &[&mut dyn FormField],
+    draw_box: bool,
+) {
+    if draw_box {
+        target.draw_box(area, BorderStyle::Rounded);
+    }
     // Indented sideways only: on a 128x64 panel a uniform inset costs a whole
     // field row, and the box's own hairline already separates the panes.
     if let Some(inner) = Padding::new(1, 3, 1, 3).inner(area) {
