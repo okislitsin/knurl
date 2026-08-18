@@ -132,16 +132,33 @@ impl<'a, M: TableModel + ?Sized> Table<'a, M> {
     }
 
     /// Index of the currently highlighted row.
+    ///
+    /// Clamped to the model **as it is now**: rows can go away under the widget
+    /// between two events (that is what [`revision`](TableModel::revision)
+    /// exists for), and an index left past the end points at nothing.
     pub fn selected(&self) -> usize {
-        self.selected
+        self.cursor()
     }
 
-    /// First visible data-row index (scroll offset).
+    /// First visible data-row index (scroll offset), clamped like
+    /// [`selected`](Table::selected).
     pub fn offset(&self) -> usize {
-        self.offset
+        self.window(self.page_size.get())
     }
 
     // ── Private helpers ───────────────────────────────────────────────────
+
+    /// The cursor, clamped to the model as it is now.
+    fn cursor(&self) -> usize {
+        self.selected.min(self.model.row_count().saturating_sub(1))
+    }
+
+    /// The scroll offset, clamped so a `visible`-row window lands on the end of
+    /// a model that shrank rather than past it.
+    fn window(&self, visible: usize) -> usize {
+        let n = self.model.row_count();
+        self.offset.min(n.saturating_sub(visible.max(1)))
+    }
 
     fn col_width(&self, c: usize) -> u16 {
         self.widths.get(c).copied().unwrap_or(0)
@@ -194,6 +211,9 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
             return Outcome::Ignored;
         }
         let page = self.page_size.get().max(1);
+        // Rows may have gone away since the last event; catch up before moving.
+        self.selected = self.cursor();
+        self.offset = self.window(page);
         match msg {
             Msg::Down if self.selected + 1 < n => {
                 self.selected += 1;
@@ -241,6 +261,10 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
         if area.w == 0 || area.h == 0 || data_rows == 0 || cols == 0 {
             return;
         }
+        // `draw` takes `&self`, so a model that shrank since the last event is
+        // corrected for the picture here; the next `update` writes it back.
+        let selected = self.cursor();
+        let offset = self.window(data_rows);
 
         let overflow = n > data_rows;
         let reserve = if overflow { V_SCROLL_RESERVE } else { 0 };
@@ -280,7 +304,7 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
 
         // Data rows.
         for row in 0..data_rows {
-            let idx = self.offset + row;
+            let idx = offset + row;
             if idx >= n {
                 break;
             }
@@ -288,7 +312,7 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
             // The cursor row follows the focus language (band when focused, plain
             // when not); the rest are dimmed so the cursor still reads on an
             // unfocused table, which has no marker column to fall back on.
-            let style = if idx == self.selected {
+            let style = if idx == selected {
                 draw_cursor_band(
                     target,
                     Area::new(area.x, y, content_right.saturating_sub(area.x), line_h),
@@ -297,7 +321,7 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
             } else {
                 Style::Muted
             };
-            let prefix = if idx == self.selected {
+            let prefix = if idx == selected {
                 self.marker.selected
             } else {
                 self.marker.unselected
@@ -311,7 +335,7 @@ impl<'a, M: TableModel + ?Sized> Component for Table<'a, M> {
         if overflow {
             // Indicator spans the data region (below the header).
             let body = Area::new(area.x, area.y + header_h, area.w, body_h);
-            draw_v_scroll(target, body, n, data_rows, self.offset);
+            draw_v_scroll(target, body, n, data_rows, offset);
         }
     }
 
@@ -734,6 +758,46 @@ mod tests {
         fn revision(&self) -> u32 {
             self.writes.get()
         }
+    }
+
+    /// Rows can go away under the widget; the cursor comes with them.
+    #[test]
+    fn the_cursor_follows_a_table_that_shrank_under_it() {
+        struct Rows {
+            n: Cell<usize>,
+            writes: Cell<u32>,
+        }
+        impl TableModel for Rows {
+            fn row_count(&self) -> usize {
+                self.n.get()
+            }
+            fn col_count(&self) -> usize {
+                2
+            }
+            fn cell(&self, r: usize, c: usize) -> &str {
+                [["a", "1"], ["b", "2"], ["c", "3"]][r][c]
+            }
+            fn revision(&self) -> u32 {
+                self.writes.get()
+            }
+        }
+
+        let rows = Rows {
+            n: Cell::new(3),
+            writes: Cell::new(0),
+        };
+        let mut table = Table::new(&rows, WIDTHS);
+        let mut t = RecordingTarget::new(128, 64);
+        table.view(&mut t, Area::new(0, 0, 120, 30));
+        let _ = table.update(&Msg::Down);
+        let _ = table.update(&Msg::Down);
+        assert_eq!(table.selected(), 2);
+
+        rows.n.set(1);
+        rows.writes.set(1);
+        assert_eq!(table.selected(), 0, "the cursor followed the data");
+        assert_eq!(table.offset(), 0);
+        assert_eq!(table.update(&Msg::Up), Outcome::Ignored);
     }
 
     #[test]

@@ -169,17 +169,21 @@ impl<'a, M: TreeModel + ?Sized> Tree<'a, M> {
     }
 
     /// Index of the currently highlighted node.
+    ///
+    /// Clamped to the model **as it is now**, and to a node that is actually
+    /// visible: nodes can go away under the widget between two events (that is
+    /// what [`revision`](TreeModel::revision) exists for), and an index left
+    /// past the end - or inside a subtree that has closed - points at nothing.
     pub fn selected(&self) -> usize {
-        self.selected
+        self.cursor()
     }
 
     /// Label of the currently highlighted node, or `""` for an empty tree.
     pub fn selected_item(&self) -> &str {
-        if self.selected < self.model.item_count() {
-            self.model.get_item(self.selected)
-        } else {
-            ""
+        if self.model.item_count() == 0 {
+            return "";
         }
+        self.model.get_item(self.cursor())
     }
 
     /// Whether the node at `idx` is currently expanded.
@@ -211,6 +215,34 @@ impl<'a, M: TreeModel + ?Sized> Tree<'a, M> {
     }
 
     /// A node is visible when all of its ancestors are expanded.
+    /// The cursor, clamped to the model as it is now: into range first, then
+    /// back to the nearest node that is on screen at all. Node 0 is a root, so
+    /// the walk always terminates.
+    fn cursor(&self) -> usize {
+        let n = self.model.item_count();
+        if n == 0 {
+            return 0;
+        }
+        let mut i = self.selected.min(n - 1);
+        while i > 0 && !self.is_visible(i) {
+            i -= 1;
+        }
+        i
+    }
+
+    /// The scroll offset, clamped the same way - it is a node index too.
+    fn window(&self) -> usize {
+        let n = self.model.item_count();
+        if n == 0 {
+            return 0;
+        }
+        let mut i = self.offset.min(n - 1);
+        while i > 0 && !self.is_visible(i) {
+            i -= 1;
+        }
+        i
+    }
+
     fn is_visible(&self, idx: usize) -> bool {
         let d = self.model.depth(idx);
         if d == 0 {
@@ -313,6 +345,12 @@ impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
         // comparing them afterwards is cheaper than threading a flag through
         // every arm - and it cannot forget one. Re-expanding an already open
         // node, or Up at the top, leaves all three alone and stays clean.
+        // Nodes may have gone away since the last event; catch up before
+        // moving, so a step off a stranded cursor lands where it looks like it
+        // should. Done before the snapshot: re-clamping is housekeeping, not
+        // something the incoming event paid for.
+        self.selected = self.cursor();
+        self.offset = self.window();
         let before = (self.selected, self.offset, self.expanded);
         let outcome = match msg {
             Msg::Down => match self.next_visible(self.selected) {
@@ -383,7 +421,10 @@ impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
         let reserve = if overflow { V_SCROLL_RESERVE } else { 0 };
         let content_w = area.w.saturating_sub(reserve);
 
-        let mut maybe = Some(self.offset);
+        // `draw` takes `&self`, so a model that shrank since the last event is
+        // corrected for the picture here; the next `update` writes it back.
+        let selected = self.cursor();
+        let mut maybe = Some(self.window());
         for row in 0..visible_rows {
             let idx = match maybe {
                 Some(i) if i < n => i,
@@ -392,7 +433,7 @@ impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
             let y = area.y.saturating_add(row as u16 * line_h);
             let d = self.model.depth(idx) as u16;
             let base_x = area.x.saturating_add(d.saturating_mul(indent_px));
-            let style = if idx == self.selected {
+            let style = if idx == selected {
                 draw_cursor_band(
                     target,
                     Area::new(area.x, y, content_w, line_h),
@@ -423,7 +464,7 @@ impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
                     self.is_expanded(idx),
                     style,
                 );
-            } else if idx == self.selected && !self.marker.selected.is_empty() {
+            } else if idx == selected && !self.marker.selected.is_empty() {
                 target.draw_text(base_x, y, self.marker.selected, style);
             }
 
@@ -450,7 +491,7 @@ impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
                 area,
                 total,
                 visible_rows,
-                self.visible_before(self.offset),
+                self.visible_before(self.window()),
             );
         }
     }
@@ -924,6 +965,38 @@ mod tests {
         fn revision(&self) -> u32 {
             self.writes.get()
         }
+    }
+
+    /// Nodes can go away under the widget, and the cursor has to come with
+    /// them - otherwise it points into the gap, and every `Up` walks through
+    /// nodes that are no longer there before anything moves on screen.
+    #[test]
+    fn the_cursor_follows_a_tree_that_shrank_under_it() {
+        let found = Discovered {
+            nodes: [
+                TreeItem::new("bus", 0),
+                TreeItem::new("sensor", 0),
+                TreeItem::new("relay", 0),
+            ],
+            len: Cell::new(3),
+            writes: Cell::new(0),
+        };
+        let mut tree = Tree::new(&found);
+        let mut t = RecordingTarget::new(128, 64);
+        tree.view(&mut t, Area::new(0, 0, 120, 30));
+        let _ = tree.update(&Msg::Down);
+        let _ = tree.update(&Msg::Down);
+        assert_eq!(tree.selected(), 2);
+
+        found.len.set(1);
+        found.writes.set(1);
+        assert_eq!(tree.selected(), 0, "the cursor followed the data");
+        assert_eq!(tree.selected_item(), "bus");
+        assert_eq!(
+            tree.update(&Msg::Up),
+            Outcome::Ignored,
+            "already at the top"
+        );
     }
 
     #[test]

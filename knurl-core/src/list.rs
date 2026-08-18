@@ -163,22 +163,42 @@ impl<'a, M: ListModel + ?Sized> List<'a, M> {
     }
 
     /// Index of the currently highlighted item.
+    ///
+    /// Clamped to the model **as it is now**: the data can shrink under the
+    /// widget between two events (that is what
+    /// [`revision`](ListModel::revision) exists for), and an index left past
+    /// the end points at nothing - a cursor with no row under it, an empty
+    /// `selected_item`, and several clicks before either comes back.
     pub fn selected(&self) -> usize {
-        self.selected
+        self.cursor()
     }
 
     /// Text of the currently highlighted item, or `""` for an empty list.
     pub fn selected_item(&self) -> &str {
-        if self.selected < self.model.item_count() {
-            self.model.get_item(self.selected)
-        } else {
-            ""
+        if self.model.item_count() == 0 {
+            return "";
         }
+        self.model.get_item(self.cursor())
     }
 
-    /// First visible item index (scroll offset).
+    /// First visible item index (scroll offset), clamped like
+    /// [`selected`](List::selected).
     pub fn offset(&self) -> usize {
-        self.offset
+        self.window(self.page_size.get())
+    }
+
+    // ── Following a model that moved ──────────────────────────────────────
+
+    /// The cursor, clamped to the model as it is now.
+    fn cursor(&self) -> usize {
+        self.selected.min(self.model.item_count().saturating_sub(1))
+    }
+
+    /// The scroll offset, clamped so a `visible`-row window still lands on the
+    /// end of a model that shrank rather than past it.
+    fn window(&self, visible: usize) -> usize {
+        let n = self.model.item_count();
+        self.offset.min(n.saturating_sub(visible.max(1)))
     }
 }
 
@@ -190,6 +210,11 @@ impl<'a, M: ListModel + ?Sized> Component for List<'a, M> {
             return Outcome::Ignored;
         }
         let page = self.page_size.get().max(1);
+        // The model may have shrunk since the last event; catch the cursor up
+        // before moving it, so `Up` from a stranded index steps off the last
+        // row rather than through the rows that are no longer there.
+        self.selected = self.cursor();
+        self.offset = self.window(page);
         match msg {
             Msg::Down if self.selected + 1 < n => {
                 self.selected += 1;
@@ -237,6 +262,11 @@ impl<'a, M: ListModel + ?Sized> Component for List<'a, M> {
         if area.w == 0 || area.h == 0 || visible == 0 || n == 0 {
             return;
         }
+        // Read through the clamps: `draw` takes `&self`, so a model that shrank
+        // since the last event is corrected for the picture here and written
+        // back by the next `update`.
+        let selected = self.cursor();
+        let offset = self.window(visible);
 
         // Reserve space on the right for the scroll indicator only when needed.
         let overflowing = n > visible;
@@ -250,13 +280,13 @@ impl<'a, M: ListModel + ?Sized> Component for List<'a, M> {
         let max_chars = (text_px / cw) as usize;
 
         for row in 0..visible {
-            let item_idx = self.offset + row;
+            let item_idx = offset + row;
             if item_idx >= n {
                 break;
             }
 
             let y = area.y.saturating_add(row as u16 * line_h);
-            let is_sel = item_idx == self.selected;
+            let is_sel = item_idx == selected;
             // Charm look: the rows around the cursor are dimmed (Muted). The
             // cursor row itself follows the focus language - a full-width band
             // when this list holds focus, a plain marked row when it does not.
@@ -285,7 +315,7 @@ impl<'a, M: ListModel + ?Sized> Component for List<'a, M> {
         }
 
         if overflowing {
-            draw_v_scroll(target, area, n, visible, self.offset);
+            draw_v_scroll(target, area, n, visible, offset);
         }
     }
 
@@ -862,6 +892,48 @@ mod tests {
 
         list.view(&mut t, area);
         assert_eq!(t.take_dirty_rect(), None, "and it settles again");
+    }
+
+    /// A model can shrink under the widget, and before this the cursor stayed
+    /// where it was: `selected` reported a row that no longer existed, nothing
+    /// was drawn under it, and the user had to rotate past the missing rows
+    /// before it reappeared. It follows the data now, in the picture and in the
+    /// getters, and the next event steps off the real last row.
+    #[test]
+    fn the_cursor_follows_a_model_that_shrank_under_it() {
+        let feed = Feed::new(3);
+        let mut list = List::new(&feed);
+        let area = Area::new(0, 0, 120, 30); // three rows
+        let mut t = RecordingTarget::new(128, 64);
+
+        let _ = list.update(&Msg::Down);
+        let _ = list.update(&Msg::Down);
+        list.view(&mut t, area);
+        assert_eq!(list.selected(), 2);
+
+        feed.len.set(1);
+        feed.writes.set(1);
+        assert_eq!(list.selected(), 0, "the cursor followed the data");
+        assert_eq!(list.selected_item(), "Alpha");
+        assert_eq!(list.offset(), 0);
+
+        // ...and the row is actually painted under it.
+        let mut after = RecordingTarget::new(128, 64);
+        list.view(&mut after, area);
+        assert!(
+            after
+                .ops()
+                .iter()
+                .any(|op| matches!(op, Op::Band { .. } | Op::Text { .. })),
+            "nothing under the cursor"
+        );
+        // The next event steps off the last real row, not through the gap.
+        assert_eq!(
+            list.update(&Msg::Up),
+            Outcome::Ignored,
+            "already at the top"
+        );
+        assert_eq!(list.update(&Msg::Down), Outcome::Ignored, "and at the end");
     }
 
     /// A model with no revision of its own keeps exactly the behaviour it had:
