@@ -1031,13 +1031,45 @@ pub trait Component {
     /// container widgets that override [`view`](Component::view) instead).
     fn draw(&self, _target: &mut dyn RenderTarget, _area: Area) {}
 
+    /// The smallest area, in pixels, this component can paint anything into.
+    ///
+    /// The default is one pixel by one - "any non-empty area will do", which is
+    /// true of a [`Label`] and of every widget that simply lets the target clip
+    /// its text. A widget that lays rows out, or that indexes into a scale,
+    /// needs more than that and says so here: a row-stacking widget wants a
+    /// [`line_height`](RenderTarget::line_height), so it reports
+    /// `(1, target.line_height())`.
+    ///
+    /// It exists because of what [`view`](Component::view) would otherwise do.
+    /// A widget handed an area it cannot use has to bail out of
+    /// [`draw`](Component::draw) - and `view` would then mark it **clean**,
+    /// having painted nothing, so the widget would sit quiet through every
+    /// later frame and stay blank when the layout grew back. Declaring the
+    /// minimum moves that decision in front of the clear: too small means
+    /// nothing is drawn, nothing is cleared, and the paint is still owed.
+    ///
+    /// It is measured against the target because a minimum in pixels is
+    /// meaningless without the font: two text rows is 20px on `FONT_6X10` and
+    /// 40 on `FONT_10X20`.
+    fn min_size(&self, _target: &dyn RenderTarget) -> (u16, u16) {
+        (1, 1)
+    }
+
     /// Renders the component, gating on its dirty flag (see the trait docs).
     ///
-    /// Provided: skip when clean, else clear `area`, [`draw`](Component::draw),
-    /// and [`mark_clean`](Component::mark_clean). Containers override this to
-    /// dispatch to children without clearing.
+    /// Provided: skip when clean **or** when the area is smaller than
+    /// [`min_size`](Component::min_size); otherwise clear `area`,
+    /// [`draw`](Component::draw), and [`mark_clean`](Component::mark_clean).
+    /// Containers override this to dispatch to children without clearing.
+    ///
+    /// Skipping for want of room leaves the component **dirty**: it has painted
+    /// nothing, so it is still owed a paint the moment it is given room.
     fn view(&self, target: &mut dyn RenderTarget, area: Area) {
-        if area.w == 0 || area.h == 0 || !self.dirty() {
+        if !self.dirty() {
+            return;
+        }
+        let (min_w, min_h) = self.min_size(&*target);
+        if area.w < min_w.max(1) || area.h < min_h.max(1) {
             return;
         }
         target.clear(area);
@@ -1449,6 +1481,49 @@ mod tests {
     use mock::{Op, RecordingTarget};
 
     // ── Area ────────────────────────────────────────────────────────────────
+
+    // ── min_size and the paint that is still owed ───────────────────────────
+
+    /// A widget handed less room than it can use paints nothing - and `view`
+    /// used to mark it clean regardless, so the widget went quiet and stayed
+    /// blank the moment the layout grew back. Nothing is drawn now, not even
+    /// the clear, and the paint is still owed.
+    #[test]
+    fn a_widget_too_small_to_paint_is_still_owed_a_paint() {
+        let list = List::new(&["Alpha", "Beta"]);
+        let mut t = RecordingTarget::new(64, 32); // line_height = 10
+        list.view(&mut t, Area::new(0, 0, 40, 4));
+        assert!(t.ops().is_empty(), "nothing painted, not even a clear");
+        assert!(list.dirty(), "so the paint is still owed");
+        assert_eq!(t.take_dirty_rect(), None, "and the frame costs nothing");
+
+        list.view(&mut t, Area::new(0, 0, 40, 20));
+        assert!(!t.ops().is_empty(), "room at last");
+        assert!(!list.dirty());
+    }
+
+    /// The default minimum is a pixel: a widget that just hands text to the
+    /// target keeps painting into whatever it is given, as it always has.
+    #[test]
+    fn the_default_minimum_is_one_pixel() {
+        let label = Label::new("hello");
+        let mut t = RecordingTarget::new(64, 32);
+        assert_eq!(label.min_size(&t), (1, 1));
+        label.view(&mut t, Area::new(0, 0, 1, 1));
+        assert!(!t.ops().is_empty(), "one pixel is still an area");
+        assert!(!label.dirty());
+    }
+
+    /// ...and an empty one is not.
+    #[test]
+    fn an_empty_area_paints_nothing_and_stays_dirty() {
+        let label = Label::new("hello");
+        let mut t = RecordingTarget::new(64, 32);
+        label.view(&mut t, Area::new(0, 0, 0, 10));
+        label.view(&mut t, Area::new(0, 0, 10, 0));
+        assert!(t.ops().is_empty());
+        assert!(label.dirty());
+    }
 
     #[test]
     fn area_contains_corners() {

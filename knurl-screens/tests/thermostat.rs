@@ -123,13 +123,14 @@ fn a_tiny_area_draws_nothing_and_never_panics() {
         Area::new(0, 0, 100, 4),
         Area::new(0, 0, 1, 1),
     ] {
-        // A fresh dial each time: `view` marks a widget clean whether or not
-        // `draw` found room to paint, so a reused one would go quiet and the
-        // test would pass by drawing nothing at all.
-        let t = painted(&Thermostat::new(20), area);
+        // A fresh dial each time: a widget already painted would draw nothing
+        // anyway, and the test would pass without checking anything.
+        let dial = Thermostat::new(20);
+        let t = painted(&dial, area);
+        assert!(t.ops().is_empty(), "drew into {area:?}");
         assert!(
-            t.ops().iter().all(|op| matches!(op, Op::Clear { .. })),
-            "drew into {area:?}"
+            dial.dirty(),
+            "{area:?}: nothing was painted, so the paint is still owed"
         );
     }
 }

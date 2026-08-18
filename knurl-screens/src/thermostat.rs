@@ -11,7 +11,7 @@
 //! needs a type - and once it is a type, the whole contract applies:
 //!
 //! - a `Cell<bool>` dirty flag set in `update` **only on a real change**;
-//! - a zero-area guard, because `draw` gets whatever area the screen has;
+//! - a `min_size`, because `draw` gets whatever area the screen's layout left;
 //! - an [`Outcome`] for every event: `Consumed` while the dial has room,
 //!   `Ignored` at either limit so the focus chain moves the cursor on, and
 //!   `Activated` on `Select` - even when applying changes not one pixel;
@@ -140,13 +140,15 @@ impl Component for Thermostat {
         self.dirty.set(true);
     }
 
+    /// The value row, and four characters to put a value on it. `view` checks
+    /// this before it clears, so an area smaller than this leaves the dial
+    /// untouched and still owed a paint - rather than blanked and marked clean.
+    fn min_size(&self, target: &dyn RenderTarget) -> (u16, u16) {
+        (4 * target.char_width().max(1), target.line_height().max(1))
+    }
+
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
         let lh = target.line_height().max(1);
-        // `view` guarantees a non-empty area, never a *useful* one: a screen may
-        // hand over four pixels, and a widget that indexes into that panics.
-        if area.w < 4 * target.char_width() || area.h < lh {
-            return;
-        }
 
         // The value row. A band across the whole row is the focus language every
         // other widget speaks - and on a monochrome panel it is the only cue

@@ -358,6 +358,13 @@ impl<'a, M: TreeModel + ?Sized> Component for Tree<'a, M> {
         outcome
     }
 
+    /// A widget that stacks rows needs a row: given less, it can paint nothing
+    /// at all, and `view` must not call that a paint (see
+    /// [`min_size`](Component::min_size)).
+    fn min_size(&self, target: &dyn RenderTarget) -> (u16, u16) {
+        (1, target.line_height().max(1))
+    }
+
     fn draw(&self, target: &mut dyn RenderTarget, area: Area) {
         let line_h = target.line_height().max(1);
         let visible_rows = (area.h / line_h) as usize;
