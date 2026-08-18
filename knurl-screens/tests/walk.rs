@@ -11,7 +11,10 @@
 //! anything a device would not have, and the recording target is a test-only
 //! facility of `knurl-core`.
 
-use knurl::{Area, Msg, RenderTarget, Screen};
+use knurl::{
+    Area, Button, FocusChain, FocusZone, Form, FormField, Msg, Outcome, Picker, RenderTarget,
+    Screen, ScreenState, Slider,
+};
 use knurl_core::mock::{Op, RecordingTarget};
 use knurl_screens::{
     App, AppEvent, MENU, Page, Panel, canvas::CanvasScreen, menu::MenuScreen,
@@ -446,4 +449,287 @@ fn opening_a_screen_repaints_all_of_it() {
     app.update(&Msg::Select);
     app.view(&mut target, Tft::BODY);
     assert_eq!(target.take_dirty_rect(), Some(Tft::BODY));
+}
+
+// ── Scenarios: the compositions, driven end to end ───────────────────────────
+
+/// The router, the screens and the chain as one thing: open every page in turn
+/// from a single application, leave each one, and arrive back at the menu row
+/// that opened it. A per-screen test cannot see this - it is the handover that
+/// breaks, not either side of it.
+#[test]
+fn one_application_opens_every_page_in_turn_and_comes_back_each_time() {
+    let mut app = app();
+    for (row, label) in MENU.iter().enumerate().take(MENU.len() - 1) {
+        // The menu is where the last visit left it, so this is a relative step.
+        if row > 0 {
+            app.update(&Msg::Down);
+        }
+        app.update(&Msg::Select);
+        assert_eq!(
+            app.page(),
+            Page::from_menu_row(row).unwrap(),
+            "row {row} ({label}) opened the wrong page"
+        );
+
+        let mut t = RecordingTarget::new(128, 64);
+        app.view(&mut t, BODY);
+        assert!(drew(&t, "< Back"), "{label} has no way out");
+
+        for _ in 0..40 {
+            app.update(&Msg::Down);
+        }
+        app.update(&Msg::Select);
+        assert_eq!(app.page(), Page::Menu, "{label} could not be left");
+        assert!(!app.quit(), "leaving a page is not leaving the demo");
+    }
+    // ...and the menu cursor is on the last page visited, not back at the top.
+    app.update(&Msg::Down);
+    app.update(&Msg::Select);
+    assert!(app.quit(), "the row after the last page is Exit");
+}
+
+/// The y of the list cursor's marker - the only thing on the panel that says
+/// where the selection is.
+fn marker_row(t: &RecordingTarget) -> Option<u16> {
+    t.ops().iter().find_map(|op| match op {
+        Op::Text { text, y, .. } if text.trim() == ">" => Some(*y),
+        _ => None,
+    })
+}
+
+/// A screen keeps its state while it is away. The router holds the screen, so
+/// coming back finds the cursor where it was left - which is what makes "Back"
+/// cheap on a device and why the demo does not rebuild a screen per visit.
+#[test]
+fn a_screen_returned_to_is_where_it_was_left() {
+    let mut app = app();
+    let list = row_of("List");
+    for _ in 0..list {
+        app.update(&Msg::Down);
+    }
+    app.update(&Msg::Select);
+    // A frame first: a scrolling widget learns its window size from `view`, so
+    // input that arrives before the first paint moves the cursor without
+    // scrolling under it. On a device the frame always comes first.
+    app.view(&mut RecordingTarget::new(128, 64), BODY);
+
+    // Rotate to the end of the list, which is also how the cursor reaches the
+    // way out - so this is the state the screen is actually left in.
+    for _ in 0..40 {
+        app.update(&Msg::Down);
+    }
+    let mut before = RecordingTarget::new(128, 64);
+    app.view(&mut before, BODY);
+    let was = marker_row(&before).expect("the list drew its cursor");
+
+    app.update(&Msg::Select);
+    assert_eq!(app.page(), Page::Menu);
+    app.update(&Msg::Select);
+    assert_eq!(app.page(), Page::List);
+
+    let mut after = RecordingTarget::new(128, 64);
+    app.view(&mut after, BODY);
+    assert_eq!(
+        marker_row(&after),
+        Some(was),
+        "the list forgot where its cursor was"
+    );
+}
+
+/// Tabs with live forms, all the way round: into the page, edit a value there,
+/// out to the strip, over to the other tab and back - and the value is still
+/// what it was set to, and painted.
+#[test]
+fn a_value_edited_behind_a_tab_survives_the_trip_to_another_tab() {
+    let mut screen = TabFormsScreen::new(Panel::SMALL);
+    screen.enter();
+
+    // Into the first tab's form, onto its second field, into the edit.
+    assert_eq!(screen.update(&Msg::Select), None, "into the page");
+    assert_eq!(screen.update(&Msg::Down), None, "onto the next field");
+    assert_eq!(screen.update(&Msg::Select), None, "into the edit");
+    assert_eq!(screen.update(&Msg::Up), None, "one step of the value");
+    assert_eq!(screen.update(&Msg::Select), None, "out of the edit");
+
+    let mut edited = RecordingTarget::new(128, 64);
+    screen.view(&mut edited, BODY);
+    let value = value_row(&edited).expect("the edited row was painted");
+
+    // Back onto the strip, across to the other tab, and back again.
+    assert_eq!(screen.update(&Msg::Up), None);
+    assert_eq!(screen.update(&Msg::Up), None, "onto the strip");
+    assert_eq!(screen.update(&Msg::Down), None, "the second tab");
+    let mut other = RecordingTarget::new(128, 64);
+    screen.view(&mut other, BODY);
+    assert!(drew(&other, "DHCP"), "the second tab's form is not showing");
+
+    assert_eq!(screen.update(&Msg::Up), None, "back to the first tab");
+    let mut again = RecordingTarget::new(128, 64);
+    screen.view(&mut again, BODY);
+    assert!(
+        again.ops().contains(&Op::Clear { area: BODY }),
+        "the outgoing form's rows were never wiped"
+    );
+    assert_eq!(
+        value_row(&again),
+        Some(value),
+        "the value did not survive the trip"
+    );
+}
+
+/// The right-hand value of the second row of a form - what a `Counter` or a
+/// `Picker` shows, and the thing an edit is supposed to have changed.
+fn value_row(t: &RecordingTarget) -> Option<String> {
+    let lh = 10; // the recording target's font
+    t.ops()
+        .iter()
+        .filter_map(|op| match op {
+            Op::Text { text, y, x, .. } if *y == lh && *x > 40 => Some(text.clone()),
+            _ => None,
+        })
+        .next_back()
+}
+
+// ── A form that changes shape under the cursor ───────────────────────────────
+
+/// The Step 1 scenario, whole: a `Picker` that grows three sliders under itself
+/// in one mode and takes them away in another. The form holds no fields - the
+/// slice is passed per call - so the screen simply builds a different array,
+/// and everything else (focus, edit mode, the re-layout repaint) has to follow.
+struct ModeScreen {
+    state: ScreenState,
+    form: Form,
+    mode: Picker<'static>,
+    red: Slider<'static>,
+    green: Slider<'static>,
+    blue: Slider<'static>,
+    back: Button<'static>,
+}
+
+const MODES: &[&str] = &["Off", "RGB"];
+
+impl ModeScreen {
+    fn new() -> Self {
+        Self {
+            state: ScreenState::new(),
+            form: Form::new(),
+            mode: Picker::new("Mode", MODES),
+            red: Slider::new("R").with_range(0, 9),
+            green: Slider::new("G").with_range(0, 9),
+            blue: Slider::new("B").with_range(0, 9),
+            back: Button::new("< Back"),
+        }
+    }
+
+    fn rgb(&self) -> bool {
+        self.mode.selected() == 1
+    }
+}
+
+impl Screen for ModeScreen {
+    type Event = AppEvent;
+
+    fn state(&mut self) -> &mut ScreenState {
+        &mut self.state
+    }
+
+    fn zones(&mut self, f: &mut dyn FnMut(&mut FocusChain, &mut [&mut dyn FocusZone])) {
+        let rgb = self.rgb();
+        let Self {
+            state,
+            form,
+            mode,
+            red,
+            green,
+            blue,
+            back,
+        } = self;
+        if rgb {
+            let mut fields: [&mut dyn FormField; 5] = [mode, red, green, blue, back];
+            let mut zone = form.zone(&mut fields);
+            f(state.chain(), &mut [&mut zone]);
+        } else {
+            let mut fields: [&mut dyn FormField; 2] = [mode, back];
+            let mut zone = form.zone(&mut fields);
+            f(state.chain(), &mut [&mut zone]);
+        }
+    }
+
+    fn on_outcome(&mut self, _msg: &Msg, _outcome: Outcome) -> Option<AppEvent> {
+        self.back.take_pressed().then_some(AppEvent::GoBack)
+    }
+
+    fn draw(&mut self, target: &mut dyn RenderTarget, area: Area) {
+        let rgb = self.rgb();
+        let Self {
+            form,
+            mode,
+            red,
+            green,
+            blue,
+            back,
+            ..
+        } = self;
+        if rgb {
+            let fields: [&mut dyn FormField; 5] = [mode, red, green, blue, back];
+            form.view(target, area, &fields);
+        } else {
+            let fields: [&mut dyn FormField; 2] = [mode, back];
+            form.view(target, area, &fields);
+        }
+    }
+}
+
+#[test]
+fn a_form_that_grows_under_the_cursor_repaints_and_keeps_its_focus() {
+    let area = Area::new(0, 0, 128, 54);
+    let mut screen = ModeScreen::new();
+    screen.enter();
+    let mut t = RecordingTarget::new(128, 64);
+    screen.view(&mut t, area);
+    assert!(!drew(&t, "R"), "no sliders in the Off mode");
+
+    // Into the picker's edit, one step to RGB, out again.
+    assert_eq!(screen.update(&Msg::Select), None, "into the edit");
+    assert_eq!(screen.update(&Msg::Down), None, "Off -> RGB");
+    assert_eq!(screen.update(&Msg::Select), None, "out of the edit");
+    assert_eq!(
+        screen.form.focus_index(),
+        0,
+        "the cursor stayed on the mode"
+    );
+
+    // The stack is a different shape now, so the form repaints all of it - and
+    // the sliders that arrived are on the panel.
+    let mut grown = RecordingTarget::new(128, 64);
+    screen.view(&mut grown, area);
+    assert!(
+        grown.ops().contains(&Op::Clear { area }),
+        "a re-layout has to wipe the stack it is replacing"
+    );
+    for label in ["R", "G", "B"] {
+        assert!(drew(&grown, label), "the {label} slider never arrived");
+    }
+
+    // The cursor walks into the new fields, which is the point of them.
+    assert_eq!(screen.update(&Msg::Down), None);
+    assert_eq!(screen.form.focus_index(), 1, "into the first slider");
+
+    // ...and back to Off takes them away again, wiping what they left behind.
+    assert_eq!(screen.update(&Msg::Up), None, "back onto the mode");
+    assert_eq!(screen.update(&Msg::Select), None);
+    assert_eq!(screen.update(&Msg::Up), None, "RGB -> Off");
+    assert_eq!(screen.update(&Msg::Select), None);
+    let mut shrunk = RecordingTarget::new(128, 64);
+    screen.view(&mut shrunk, area);
+    assert!(
+        shrunk.ops().contains(&Op::Clear { area }),
+        "the rows the sliders had are still on the panel"
+    );
+    assert!(!drew(&shrunk, "R"), "a slider outlived its mode");
+    assert!(
+        drew(&shrunk, "< Back"),
+        "the way out came back up the stack"
+    );
 }
