@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/okislitsin/knurl/compare/knurl-core-v0.5.0...knurl-core-v0.5.1) - 2026-08-18
+
+### Added
+
+- *(core)* a model can say when its data changed
+
+### Fixed
+
+- *(screens)* the last three screens stop repainting what did not change
+- *(core)* the cursor follows a model that shrank under it
+- *(core)* a widget too small to paint is still owed its paint
+
+### Other
+
+- *(sim)* a screenshot matrix of every widget in every state
+- *(core)* a seeded sweep over every widget and every composition
+- the contract for writing a widget of your own
+
 ## [0.5.0](https://github.com/okislitsin/knurl/compare/knurl-core-v0.4.0...knurl-core-v0.5.0) - 2026-08-17
 
 ### Added
