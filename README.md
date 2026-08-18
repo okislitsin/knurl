@@ -305,8 +305,36 @@ plain `cargo test` from the root never needs SDL2.
 ## Testing
 
 ```sh
-cargo test            # core + graphics widgets, host-side (no SDL2)
+cargo test                     # core + graphics widgets, host-side (no SDL2)
+cargo test -p knurl-sim        # ...plus the screenshot matrix (needs SDL2)
 ```
+
+Three of those deserve naming, because each exists to catch something the
+others cannot:
+
+- **The screenshot matrix** ([`knurl-sim/tests/matrix.rs`](knurl-sim/tests/matrix.rs))
+  renders every widget in every state - focused and not, checked and not,
+  editing and not, mono and colour, every border style, empty data, and areas
+  one to four pixels wide - into an area the size of the widget, and compares it
+  against a golden image **pixel by pixel** (never by PNG bytes, so a new
+  encoder cannot make it lie). The nine pictures in `docs/` are a shop window;
+  this is the test. When a cell differs you get `<name>.actual.png` and
+  `<name>.diff.png` beside the golden, differing pixels in magenta. To
+  regenerate after an intended change - and read the diff before committing it:
+
+  ```sh
+  KNURL_MATRIX=bless cargo test -p knurl-sim --test matrix
+  ```
+
+- **The seeded sweep** (`knurl-core/src/smoke.rs`) walks every widget and every
+  composition through random events over random areas, including the degenerate
+  ones a layout produces when it runs out of room. Every failure prints a seed
+  that reproduces it. It must run in debug: half of what it looks for is
+  arithmetic overflow, which release builds wrap away.
+
+- **The walk** ([`knurl-screens/tests/walk.rs`](knurl-screens/tests/walk.rs))
+  drives the demo application itself - every screen opens, every screen can be
+  left, the compositions behave, and a frame costs what it should on the bus.
 
 ## License
 

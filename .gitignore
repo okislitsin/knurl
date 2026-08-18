@@ -7,3 +7,6 @@ target/
 .idea/
 
 .DS_Store/
+# Screenshot-matrix failure output (written beside the golden that differed)
+knurl-sim/tests/matrix/*.actual.png
+knurl-sim/tests/matrix/*.diff.png

@@ -26,7 +26,10 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
-      # default-members exclude knurl-sim, so this never needs SDL2
+      # default-members exclude knurl-sim, so this never needs SDL2. The
+      # seeded sweep over every widget and composition runs here, and it has to
+      # be a debug profile: it hunts arithmetic overflow, which release builds
+      # wrap away silently.
       - name: Run tests
         run: cargo test --all-features
 
@@ -55,8 +58,11 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      # The desktop tests never open a window; no video driver needed.
-      - name: Run knurl-sim tests
+      # The desktop tests never open a window; no video driver needed. This is
+      # also where the screenshot matrix runs - every widget in every state,
+      # compared pixel by pixel against the goldens in knurl-sim/tests/matrix.
+      # A failure writes <cell>.actual.png and <cell>.diff.png beside them.
+      - name: Run knurl-sim tests (including the screenshot matrix)
         run: cargo test -p knurl-sim
 
       # Explicit guard that the demos don't rot (also covered by the lint below).
