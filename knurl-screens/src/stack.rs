@@ -49,6 +49,16 @@ impl Stack {
         }
     }
 
+    /// The first visible row.
+    pub fn scroll(&self) -> usize {
+        self.scroll
+    }
+
+    /// Rows that fitted the last time the window was painted.
+    pub fn visible(&self) -> usize {
+        self.visible
+    }
+
     /// The zone that gives the window to the focus chain.
     pub fn zone(&mut self, total: usize) -> ScrollZone<'_> {
         let max = total.saturating_sub(self.visible);

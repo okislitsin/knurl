@@ -466,6 +466,29 @@ impl Paginator {
         self.current
     }
 
+    /// Sets how many pages there are, clamping the current one into the new
+    /// range.
+    ///
+    /// A paginator over a window that scrolls cannot know its page count until
+    /// it knows how much fits, and that depends on the panel: twelve rows are
+    /// eight pages on an OLED and one on a TFT. Setting the same count again is
+    /// not a change, so a screen may re-assert it every frame.
+    pub fn set_pages(&mut self, pages: usize) {
+        if pages == self.pages {
+            return;
+        }
+        self.pages = pages;
+        self.dirty.set(true);
+        if pages > 0 && self.current >= pages {
+            self.current = pages - 1;
+        }
+    }
+
+    /// How many pages there are.
+    pub fn pages(&self) -> usize {
+        self.pages
+    }
+
     /// Sets the current page, clamped into `[0, pages - 1]`. Landing on the
     /// page it is already on is not a change.
     pub fn set_current(&mut self, idx: usize) {
@@ -880,6 +903,25 @@ mod tests {
 
         p.view(&mut t, area);
         assert_eq!(t.take_dirty_rect(), None);
+    }
+
+    /// The page count follows the panel, so it is a setter and it gates like
+    /// every other: the same count again is not a change, a smaller one pulls
+    /// the current page back into range.
+    #[test]
+    fn paginator_pages_follow_the_window() {
+        let mut p = Paginator::new(8);
+        p.set_current(7);
+        p.mark_clean();
+        assert!(!p.dirty());
+
+        p.set_pages(8);
+        assert!(!p.dirty(), "the same count is not a change");
+
+        p.set_pages(3);
+        assert!(p.dirty());
+        assert_eq!(p.pages(), 3);
+        assert_eq!(p.current(), 2, "the current page came back into range");
     }
 
     #[test]
